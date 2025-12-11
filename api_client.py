@@ -9,7 +9,7 @@ Handles:
 - Schedule (next/last game)
 """
 
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 import datetime
 import re
 import requests
@@ -29,6 +29,9 @@ from utils import (
 # ------------------------- #
 # ESPN + Sleeper Endpoints
 # ------------------------- #
+# -------------------------
+# Config & endpoints
+# -------------------------
 # -------------------------
 # Config & endpoints
 # -------------------------
@@ -56,12 +59,13 @@ COMMON_TEAM_NAMES = [
 # Use uppercase for POSITIONS set
 POSITIONS = {"QB","RB","WR","TE","K","P","DE","DT","LB","CB","S","OL","G","T","C"}
 
-# ------------------------- #
-# Team Cache
-# ------------------------- #
-_TEAM_CACHE = {}
+# -------------------------
+# Local caches
+# -------------------------
+_TEAM_CACHE: Dict[str, Dict[str, Any]] = {}
 _TEAM_CACHE_LAST = 0
-
+_PLAYER_CACHE: Dict[str, Dict[str, Any]] = {}
+_PLAYER_CACHE_LAST = 0
 
 # -------------------------
 # Team cache
@@ -173,15 +177,16 @@ def _ensure_player_cache(force: bool = False):
 # ----------------------------------------------------
 # Team news
 # ----------------------------------------------------
-def fetch_rss(url: str):
+# ----- RSS Fetcher -----
+def fetch_rss(url):
     try:
         feed = feedparser.parse(url)
-        return feed.entries or []
-    except Exception:
+        return feed.entries
+    except:
         return []
 
 
-def fetch_google_news(team: str):
+def fetch_google_news(team):
     url = GOOGLE_NEWS_RSS.format(query=team.replace(" ", "+"))
     return fetch_rss(url)
 
@@ -194,132 +199,116 @@ def fetch_pft_news():
     return fetch_rss(PFT_RSS)
 
 
-def fetch_bing_news(team: str):
+def fetch_bing_news(team):
     if not BING_API_KEY:
         return []
     try:
         headers = {"Ocp-Apim-Subscription-Key": BING_API_KEY}
         url = f"https://api.bing.microsoft.com/v7.0/news/search?q={team}+NFL"
-        data = requests.get(url, headers=headers, timeout=10).json()
+        data = requests.get(url, headers=headers).json()
         return data.get("value", [])
-    except Exception:
+    except:
         return []
 
 
-def score_article(article_text: str, tokens: List[str]) -> int:
-    text = (article_text or "").lower()
+# -------------------------------------------------------
+#  SCORING SYSTEM (Relevance Ranking)
+# -------------------------------------------------------
+def score_article(article_text: str, tokens: list):
+    text = article_text.lower()
     score = 0
     for tok in tokens:
-        if not tok:
-            continue
-        # token weight: full team, abbreviation, mascot
-        if re.search(rf"\b{re.escape(tok)}\b", text):
-            score += 3
-        elif tok in text:
-            score += 1
-    # small bonus for multiple matches
-    matches = sum(1 for tok in tokens if tok and tok in text)
-    score += min(matches, 3)
+        if tok in text:
+            score += 2
     return score
 
-def get_team_news(team_name: str, max_results: int = 6) -> str:
-    """
-    Multi-source team news. If few/no relevant team articles found, fall back to top NFL (ESPN) headlines.
-    """
+
+# -------------------------------------------------------
+#  MAIN NEWS FUNCTION
+# -------------------------------------------------------
+def get_team_news(team_name: str):
+    """Fetch multi-source NFL news and rank results by relevance."""
     if not team_name:
-        return "Please provide a team, e.g., 'Patriots news'."
-    team_lower = team_name.lower().strip()
+        return "Please provide a team (e.g., 'Patriots news')."
+
+    team_lower = team_name.lower()
     tokens = [team_lower] + team_lower.split()
-    # also add common mascots / keywords (quick map)
-    common_map = {
-        "giants": ["giants", "new york giants", "ny giants", "big blue"],
-        "jets": ["jets", "new york jets", "ny jets"],
-        "patriots": ["patriots", "new england patriots"],
-        "cowboys": ["cowboys", "dallas cowboys"],
-    }
-    last_word = team_lower.split()[-1]
-    if last_word in common_map:
-        tokens += common_map[last_word]
-    tokens = list(dict.fromkeys([t.lower() for t in tokens if t]))
 
-    # collect sources
-    articles: List[Dict[str, str]] = []
-
-    # ESPN
+    # ----- ESPN NEWS (via existing scoreboard fetch_json) -----
     espn_data = fetch_json(ESPN_NEWS_URL)
-    if isinstance(espn_data, dict):
-        espn_items = espn_data.get("articles") or espn_data.get("items") or []
-        for it in espn_items:
-            title = it.get("headline") or it.get("title") or ""
-            link = (it.get("links", {}) or {}).get("web", {}).get("href") or it.get("canonical") or it.get("link") or ""
-            desc = it.get("description") or it.get("summary") or ""
-            articles.append({"title": title, "link": link, "desc": desc, "source": "ESPN"})
+    espn_articles_raw = espn_data.get("articles", [])
 
-    # Google News
-    try:
-        for e in fetch_google_news(team_name):
-            title = getattr(e, "title", "") or e.get("title", "")
-            link = getattr(e, "link", "") or e.get("link", "")
-            desc = getattr(e, "summary", "") or e.get("summary", "")
-            articles.append({"title": title, "link": link, "desc": desc, "source": "Google"})
-    except Exception:
-        pass
+    espn_articles = []
+    for a in espn_articles_raw:
+        title = a.get("headline", "")
+        link = a.get("links", {}).get("web", {}).get("href", "")
+        desc = a.get("description", "")
+        espn_articles.append({"title": title, "link": link, "desc": desc})
 
-    # Yahoo + PFT
-    for e in fetch_yahoo_news():
-        title = getattr(e, "title", "") or e.get("title", "")
-        link = getattr(e, "link", "") or e.get("link", "")
-        desc = getattr(e, "summary", "") or e.get("summary", "")
-        articles.append({"title": title, "link": link, "desc": desc, "source": "Yahoo"})
-    for e in fetch_pft_news():
-        title = getattr(e, "title", "") or e.get("title", "")
-        link = getattr(e, "link", "") or e.get("link", "")
-        desc = getattr(e, "summary", "") or e.get("summary", "")
-        articles.append({"title": title, "link": link, "desc": desc, "source": "PFT"})
+    # ----- GOOGLE NEWS -----
+    google_entries = fetch_google_news(team_name)
+    google_articles = [
+        {"title": e.title, "link": e.link, "desc": e.get("summary", "")}
+        for e in google_entries
+    ]
 
-    # Optional Bing
-    for e in fetch_bing_news(team_name):
-        title = e.get("name", "")
-        link = e.get("url", "")
-        desc = e.get("description", "")
-        articles.append({"title": title, "link": link, "desc": desc, "source": "Bing"})
+    # ----- YAHOO NEWS -----
+    yahoo_entries = fetch_yahoo_news()
+    yahoo_articles = [
+        {"title": e.title, "link": e.link, "desc": e.get("summary", "")}
+        for e in yahoo_entries
+    ]
 
-    # score & filter
-    scored = []
-    for art in articles:
-        text_blob = f"{art.get('title','')} {art.get('desc','')} {art.get('link','')}"
-        s = score_article(text_blob, tokens)
+    # ----- PFT -----
+    pft_entries = fetch_pft_news()
+    pft_articles = [
+        {"title": e.title, "link": e.link, "desc": e.get("summary", "")}
+        for e in pft_entries
+    ]
+
+    # ----- BING NEWS -----
+    bing_entries = fetch_bing_news(team_name)
+    bing_articles = [
+        {"title": e.get("name", ""), "link": e.get("url", ""), "desc": e.get("description", "")}
+        for e in bing_entries
+    ]
+
+    # ------------------------------
+    # Combine all sources
+    # ------------------------------
+    all_articles = (
+        espn_articles +
+        google_articles +
+        yahoo_articles +
+        pft_articles +
+        bing_articles
+    )
+
+    # ------------------------------
+    # Score relevance
+    # ------------------------------
+    ranked = []
+    for art in all_articles:
+        text = f"{art['title']} {art['desc']} {art['link']}"
+        s = score_article(text, tokens)
         if s > 0:
-            scored.append((s, art))
-    scored.sort(key=lambda x: x[0], reverse=True)
+            ranked.append((s, art))
 
-    if scored:
-        top = scored[:max_results]
-        md = [f"📰 **{team_name.title()} News (Multi-source)**\n"]
-        for s, a in top:
-            title = a.get("title") or "Untitled"
-            link = a.get("link") or ""
-            safe_title = title.replace("]", "\\]")
-            if link:
-                md.append(f"- ⭐ **[{safe_title}]({link})**")
-            else:
-                md.append(f"- ⭐ {safe_title}")
-        return "\n".join(md)
+    ranked.sort(key=lambda x: x[0], reverse=True)
 
-    # fallback: top NFL headlines from ESPN (first 6)
-    if isinstance(espn_data, dict):
-        espn_items = espn_data.get("articles") or espn_data.get("items") or []
-        lines = ["📰 **Top NFL Headlines (ESPN)**\n"]
-        for it in (espn_items or [])[:6]:
-            title = it.get("headline") or it.get("title") or it.get("description") or "Untitled"
-            link = (it.get("links", {}) or {}).get("web", {}).get("href") or it.get("canonical") or ""
-            if link:
-                lines.append(f"- [{title}]({link})")
-            else:
-                lines.append(f"- {title}")
-        return "\n".join(lines)
-    return f"No recent news found for '{team_name}'."
+    if not ranked:
+        return f"No recent news found for '{team_name}'."
 
+    top_articles = ranked[:6]
+
+    # ------------------------------
+    # Format Markdown Output
+    # ------------------------------
+    md = [f"📰 **{team_name.title()} News (Multi-source)**\n"]
+    for score_val, a in top_articles:
+        md.append(f"- ⭐ **[{a['title']}]({a['link']})**")
+
+    return "\n".join(md)
 # ----------------------------------------------------
 # Live Scoreboard
 # ----------------------------------------------------
@@ -390,144 +379,218 @@ def get_live_scores(team_name: Optional[str] = None):
 # ----------------------------------------------------
 # Standings + Playoffs (imports from your original)
 # ----------------------------------------------------
-# (ALL standings code placed here EXACTLY as currently working)
-# To save space here, assume we paste your entire get_standings() implementation
-#from your_full_code_import_here import get_standings   # <- Replace with your full function
-def _detect_conference_from_entry(entry: Dict[str, Any]) -> str:
-    # Prefer groups metadata
-    team = entry.get("team", {}) or {}
-    groups = team.get("groups") or []
+# ---------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------
+def detect_conference(entry):
+    """
+    Reliable AFC/NFC detection using ESPN metadata + robust fallback.
+    """
+    team = entry.get("team", {})
+    groups = team.get("groups", [])
+
+    # 1 → Primary: ESPN metadata
     for g in groups:
-        name = (g.get("name") or "").upper()
-        if "AFC" in name: return "AFC"
-        if "NFC" in name: return "NFC"
-    # fallback using mascot
-    dn = (team.get("displayName") or "").lower().strip()
-    mascot = dn.split()[-1] if dn else ""
-    NFC = {'cowboys','giants','eagles','commanders','bears','lions','packers','vikings','falcons','panthers','saints','buccaneers','cardinals','rams','49ers','seahawks'}
-    AFC = {'bills','dolphins','patriots','jets','ravens','bengals','browns','steelers','texans','colts','jaguars','titans','broncos','chiefs','raiders','chargers'}
-    if mascot in NFC: return "NFC"
-    if mascot in AFC: return "AFC"
+        name = g.get("name", "")
+        if name.startswith("AFC"):
+            return "AFC"
+        if name.startswith("NFC"):
+            return "NFC"
+
+    # 2 → Fallback: identify by mascot (last word in displayName)
+    display = team.get("displayName", "").lower().strip()
+    mascot = display.split()[-1]  # "new york giants" → "giants"
+
+    NFC = {
+        'cowboys','giants','eagles','commanders',
+        'bears','lions','packers','vikings',
+        'falcons','panthers','saints','buccaneers',
+        'cardinals','rams','49ers','seahawks'
+    }
+
+    AFC = {
+        'bills','dolphins','patriots','jets',
+        'ravens','bengals','browns','steelers',
+        'texans','colts','jaguars','titans',
+        'broncos','chiefs','raiders','chargers'
+    }
+
+    if mascot in NFC:
+        return "NFC"
+    if mascot in AFC:
+        return "AFC"
+
+    # 3 → Last fallback (rare cases)
     return "AFC"
 
 
-def trend_indicator(pct: float) -> str:
-    if pct >= 0.700: return "↑"
-    if pct <= 0.350: return "↓"
+
+def trend_indicator(pct):
+    if pct >= 0.700:
+        return "↑"
+    if pct <= 0.350:
+        return "↓"
     return "•"
 
 
-def clinched_indicator(entry: Dict[str, Any]) -> str:
-    stats = entry.get("stats", []) or []
+def clinched_indicator(entry):
+    stats = entry.get("stats", [])
     statmap = {s.get("name"): s.get("value") for s in stats}
-    if statmap.get("clinchedDivision"): return "🏆"
-    if statmap.get("clinchedPlayoff"): return "🔒"
+    if statmap.get("clinchedDivision"):
+        return "🏆"
+    if statmap.get("clinchedPlayoff"):
+        return "🔒"
     return ""
 
 
-def get_stat(entry: Dict[str, Any], stat_name: str, default: float = 0.0) -> float:
-    for s in entry.get("stats", []) or []:
+def get_stat(entry, stat_name, default=0):
+    """Safe helper to get numeric stats like SOS."""
+    for s in entry.get("stats", []):
         if s.get("name") == stat_name:
             try:
                 return float(s.get("value"))
-            except Exception:
+            except:
                 return default
     return default
 
 
+# ---------------------------------------------------------
+# Main Standings Function
+# ---------------------------------------------------------
 def get_standings(team_name: Optional[str] = None) -> str:
     data = fetch_json(ESPN_STANDINGS_URL)
     if "__error" in data:
         return f"⚠️ Error fetching standings: {data['__error']}"
-    divisions = data.get("children") or []
+
+    divisions = data.get("children", [])
     if not divisions:
         return "Standings unavailable."
+
     team_q = team_name.lower() if team_name else None
+
+    output = []
     conferences = {"AFC": [], "NFC": []}
-    # parse nested divisions/groups -> entries
+
+    # --------------------------------------
+    # Parse all teams
+    # --------------------------------------
     for div in divisions:
-        standings_section = (div.get("standings") or {}) or {}
-        entries = standings_section.get("entries") or []
+        div_name = div.get("name", "Unknown Division")
+        entries = div.get("standings", {}).get("entries", [])
+        div_lines = []
+
         for entry in entries:
-            team = entry.get("team") or {}
-            name = team.get("displayName") or team.get("name") or ""
-            abbr = (team.get("abbreviation") or "").lower()
-            stats = entry.get("stats") or []
+            team = entry.get("team", {})
+            name = team.get("displayName", "")
+            abbr = team.get("abbreviation", "").lower()
+
+            stats = entry.get("stats", [])
             statmap = {s.get("name"): s.get("value") for s in stats}
-            try:
-                wins = int(float(statmap.get("wins", 0)))
-                losses = int(float(statmap.get("losses", 0)))
-                ties = int(float(statmap.get("ties", 0)))
-            except Exception:
-                wins = int(statmap.get("wins", 0) or 0)
-                losses = int(statmap.get("losses", 0) or 0)
-                ties = int(statmap.get("ties", 0) or 0)
-            pct = float(statmap.get("winPercent", 0) or 0.0)
+
+            wins = int(statmap.get("wins", 0))
+            losses = int(statmap.get("losses", 0))
+            ties = int(statmap.get("ties", 0))
+            pct = float(statmap.get("winPercent", 0))
+
             arrow = trend_indicator(pct)
             clinch = clinched_indicator(entry)
             sos = get_stat(entry, "strengthOfSchedule", 0.0)
-            # team filter
+
+            # TEAM FILTER MODE
             if team_q and (team_q in name.lower() or team_q == abbr):
-                return f"📊 **{name} Standings**\n\n{wins}-{losses}-{ties} ({pct:.3f}) {arrow}{clinch}\nStrength of Schedule: **{sos:.3f}**"
-            conf = _detect_conference_from_entry(entry)
-            conferences.setdefault(conf, []).append({"name": name, "wins": wins, "losses": losses, "ties": ties, "pct": pct, "arrow": arrow, "clinch": clinch, "sos": sos})
-    # Build output blocks
-    out_blocks = []
-    # Division blocks (human-readable)
-    # We'll attempt to include division blocks if data present in children
-    for div in divisions:
-        div_name = div.get("name") or ""
-        entries = (div.get("standings") or {}).get("entries") or []
-        if not entries:
-            continue
-        lines = []
-        for e in entries:
-            t = e.get("team") or {}
-            n = t.get("displayName") or t.get("name") or ""
-            stats = e.get("stats") or []
-            statmap = {s.get("name"): s.get("value") for s in stats}
-            wins = int(float(statmap.get("wins", 0) or 0))
-            losses = int(float(statmap.get("losses", 0) or 0))
-            ties = int(float(statmap.get("ties", 0) or 0))
-            pct = float(statmap.get("winPercent", 0) or 0.0)
-            lines.append(f"{n}: **{wins}-{losses}-{ties}** ({pct:.3f})")
-        if lines:
-            out_blocks.append("### 🏈 " + div_name + "\n" + "\n".join(lines))
-    # Playoff projections per conference
-    def playoff_block(conf: str) -> str:
-        teams = conferences.get(conf, []) or []
+                return (
+                    f"📊 **{name} Standings**\n\n"
+                    f"{wins}-{losses}-{ties} ({pct:.3f}) {arrow}{clinch}\n"
+                    f"Strength of Schedule: **{sos:.3f}**"
+                )
+
+            # DIVISION-LISTS
+            div_lines.append(
+                f"{name}: **{wins}-{losses}-{ties}** ({pct:.3f}) {arrow}{clinch}"
+            )
+
+            # Add to conference dictionary
+            conf = detect_conference(entry)
+            conferences[conf].append({
+                "name": name,
+                "wins": wins,
+                "losses": losses,
+                "ties": ties,
+                "pct": pct,
+                "arrow": arrow,
+                "clinch": clinch,
+                "sos": sos
+            })
+
+        if not team_q:
+            output.append(f"### 🏈 {div_name}\n" + "\n".join(div_lines))
+
+    if team_q:
+        return f"No standings found for '{team_name}'."
+
+    # --------------------------------------
+    # PLAYOFF PROJECTIONS (Top 7)
+    # --------------------------------------
+    def playoff_block(conf):
+        teams = conferences.get(conf, [])
         if not teams:
             return f"## 🔥 {conf} Playoff Projection\n\n_No data_"
+
         teams_sorted = sorted(teams, key=lambda t: (-t["pct"], -t["wins"]))
-        lines = []
-        for i, t in enumerate(teams_sorted[:7]):
-            lines.append(f"**{i+1}. {t['name']}** — {t['wins']}-{t['losses']}-{t['ties']} ({t['pct']:.3f}) {t['arrow']}{t['clinch']}")
+
+        lines = [
+            f"**{i+1}. {t['name']}** — {t['wins']}-{t['losses']}-{t['ties']} "
+            f"({t['pct']:.3f}) {t['arrow']}{t['clinch']}"
+            for i, t in enumerate(teams_sorted[:7])
+        ]
+
         return f"## 🔥 {conf} Playoff Projection\n\n" + "\n".join(lines)
-    def wildcard_block(conf: str) -> str:
-        teams = conferences.get(conf, []) or []
+
+    # --------------------------------------
+    # WILD CARD RACE (Seeds 8–12)
+    # --------------------------------------
+    def wildcard_block(conf):
+        teams = conferences.get(conf, [])
         teams_sorted = sorted(teams, key=lambda t: (-t["pct"], -t["wins"]))
-        bubble = teams_sorted[7:12]
-        if not bubble: return ""
-        return "### 🌟 " + conf + " Wild Card Race (Seeds 8–12)\n" + "\n".join([f"- {t['name']}: {t['wins']}-{t['losses']}-{t['ties']} ({t['pct']:.3f}) {t['arrow']}" for t in bubble])
-    def bubble_teams(conf: str) -> str:
-        teams = conferences.get(conf, []) or []
+
+        bubble = teams_sorted[7:12]  # seeds 8–12
+
+        if not bubble:
+            return ""
+
+        lines = [
+            f"- {t['name']}: {t['wins']}-{t['losses']}-{t['ties']} "
+            f"({t['pct']:.3f}) {t['arrow']}"
+            for t in bubble
+        ]
+
+        return f"### 🌟 {conf} Wild Card Race (Seeds 8–12)\n" + "\n".join(lines)
+
+    # --------------------------------------
+    # BUBBLE TEAMS (Trending up/down)
+    # --------------------------------------
+    def bubble_teams(conf):
+        teams = conferences.get(conf, [])
         trending_up = [t for t in teams if t["arrow"] == "↑"]
         trending_down = [t for t in teams if t["arrow"] == "↓"]
-        up_block = "\n".join([f"- {t['name']} ({t['pct']:.3f})" for t in trending_up[:5]]) or "_(none)_"
-        down_block = "\n".join([f"- {t['name']} ({t['pct']:.3f})" for t in trending_down[:5]]) or "_(none)_"
-        return f"### 📈 {conf} Trending Up\n{up_block}\n\n### 📉 {conf} Trending Down\n{down_block}"
-    # assemble
-    out_blocks.append(playoff_block("AFC"))
-    wc_afc = wildcard_block("AFC")
-    if wc_afc: out_blocks.append(wc_afc)
-    out_blocks.append(bubble_teams("AFC"))
-    out_blocks.append(playoff_block("NFC"))
-    wc_nfc = wildcard_block("NFC")
-    if wc_nfc: out_blocks.append(wc_nfc)
-    out_blocks.append(bubble_teams("NFC"))
-    return "\n\n".join(out_blocks)
 
+        up_block = "\n".join([f"- {t['name']} ({t['pct']:.3f})" for t in trending_up[:5]])
+        down_block = "\n".join([f"- {t['name']} ({t['pct']:.3f})" for t in trending_down[:5]])
 
+        return (
+            f"### 📈 {conf} Trending Up\n{up_block}\n\n"
+            f"### 📉 {conf} Trending Down\n{down_block}"
+        )
+
+    output.append(playoff_block("AFC"))
+    output.append(wildcard_block("AFC"))
+    output.append(bubble_teams("AFC"))
+
+    output.append(playoff_block("NFC"))
+    output.append(wildcard_block("NFC"))
+    output.append(bubble_teams("NFC"))
+
+    return "\n\n".join(output)
 
 
 # ----------------------------------------------------
@@ -660,67 +723,211 @@ def get_fantasy_player_stats(query_name: Optional[str] = None) -> str:
 
 
 # -------------------------
-# Player profile smart lookup
+# Player Stats (Incorporated Fixed Logic)
 # -------------------------
-# small in-memory DataFrame to save looked-up profiles (optional)
+# Initialize once
 player_df = pd.DataFrame(columns=["Name", "Age", "Position", "Team", "College", "Years_in_NFL"])
 
-def save_player_profile(profile: Dict[str, Any]):
+def save_player_profile(profile_dict: Dict[str, Any]):
     global player_df
-    player_df = pd.concat([player_df, pd.DataFrame([profile])], ignore_index=True)
+    player_df = pd.concat([player_df, pd.DataFrame([profile_dict])], ignore_index=True)
 
-def _normalize_player_query(q: str) -> str:
-    q = (q or "").lower().strip()
+# Helper functions for robust player lookup
+
+def _normalize_query(q: str) -> str:
+    q = q.lower().strip()
+    # remove punctuation
     q = re.sub(r"[^a-z0-9\s]", " ", q)
+    # collapse whitespace
     q = re.sub(r"\s+", " ", q).strip()
-    # strip common long phrases
-    for w in ("who is", "tell me about", "player", "fantasy", "stats", "for"):
+
+    # --- UPDATED: Added more human-like filler words to strip ---
+    for w in (
+        "who is", "tell me about", "show me", "give me",
+        "player", "on the", "in the", "from", "team", "the",
+        "for", "fantasy", "stats", "ppr", "pts",
+        "qb for", "wr for", "rb for", "te for", "k for"
+    ):
+        # Use word boundaries (\b) to avoid removing parts of a name (e.g., 'who is' vs 'whis')
+        # but since we are replacing single-word tokens in a loop, a simple replace is faster.
         q = q.replace(w, " ")
+
     q = re.sub(r"\s+", " ", q).strip()
     return q
 
-def get_player_profile_smart(user_input: str, debug: bool = False) -> str:
-    _ensure_player_cache()
+def _detect_position_and_strip(query: str) -> Tuple[Optional[str], str]:
+    """Return (position_hint_or_None, query_without_position)."""
+    words = query.split()
+    pos = None
+    remaining = []
+    for w in words:
+        if w.upper() in POSITIONS:
+            pos = w.upper()
+        else:
+            remaining.append(w)
+    return pos, " ".join(remaining)
+
+# NOTE: _detect_team_from_query relies on the global _team_cache which is handled by _ensure_team_cache()
+
+def _detect_team_from_query(query: str, debug=False) -> Optional[str]:
+    """
+    Detect team token either from COMMON_TEAM_NAMES or from _team_cache (abbr/displayName/slug).
+    Returns normalized team_token (like 'bills' or 'buf') or None.
+    """
+    # quick local check
+    for t in COMMON_TEAM_NAMES:
+        if t in query:
+            if debug: print("team detected (common list):", t)
+            return t
+
+    # try to find team via team cache (if available)
+    try:
+        _ensure_team_cache()
+    except Exception:
+        pass
+
+    # search _team_cache keys/values for matches
+    for k, v in (globals().get("_team_cache") or {}).items():
+        dn = (v.get("displayName") or "").lower()
+        ab = (v.get("abbr") or "").lower()
+        slug = (v.get("slug") or "").lower()
+        if dn and dn in query:
+            if debug: print("team detected (team_cache displayName):", dn)
+            return dn.split()[-1] if " " in dn else dn
+        if ab and ab.lower() in query:
+            if debug: print("team detected (team_cache abbr):", ab)
+            return ab
+        if slug and slug in query:
+            if debug: print("team detected (team_cache slug):", slug)
+            return slug.split("-")[-1] if "-" in slug else slug
+
+    return None
+
+def _player_matches_name(info: Dict[str, Any], name_tokens: List[str]) -> bool:
+    """Check if all name tokens are present in player's name fields."""
+    first = (info.get("first_name") or "").lower().strip()
+    last = (info.get("last_name") or "").lower().strip()
+    full = (info.get("full_name") or f"{first} {last}").lower().strip()
+    if not full:
+        return False
+    # All tokens must be present in the full name string
+    return all(tok in full for tok in name_tokens)
+
+def _player_matches_team(info: Dict[str, Any], team_filter: str) -> bool:
+    """Check if player's team matches the normalized team filter (abbr, full, or short name)."""
+    if not team_filter:
+        return True
+    team_field = (info.get("team") or "").lower()
+    if team_filter in team_field:
+        return True
+    try:
+        _ensure_team_cache()
+        for k, v in (globals().get("_team_cache") or {}).items():
+            dn = (v.get("displayName") or "").lower()
+            ab = (v.get("abbr") or "").lower()
+            slug = (v.get("slug") or "").lower()
+            if team_filter == ab or team_filter in dn or team_filter in slug:
+                if ab and ab in team_field: return True
+                if dn and dn.split()[-1] in team_field: return True
+    except Exception:
+        pass
+    return False
+
+
+def get_player_profile_smart(user_input: str, debug: bool=False) -> str:
+    """
+    Robust player lookup:
+      - normalize input
+      - extract position hint (optional)
+      - extract team hint (optional)
+      - gather all name matches, then filter by position/team if provided
+      - save matched profiles to player_df (internal)
+      - return a readable string (single profile or short list)
+    """
+    try:
+        _ensure_player_cache()
+    except Exception as e:
+        if debug: print(f"Error calling _ensure_player_cache: {e}")
+        pass
+
     if not user_input or not user_input.strip():
         return "Please provide a player name."
-    q = _normalize_player_query(user_input)
-    tokens = [t for t in q.split() if t]
-    if not tokens:
+
+    q = _normalize_query(user_input)
+    if debug: print("normalized query:", q)
+
+    pos_hint, q = _detect_position_and_strip(q)
+    if debug: print("pos_hint:", pos_hint, "remaining:", q)
+
+    team_hint = _detect_team_from_query(q, debug=debug)
+    if team_hint:
+        q = q.replace(team_hint, " ").strip()
+        q = re.sub(r"\s+", " ", q)
+    if debug: print("team_hint:", team_hint, "name part:", q)
+
+    name_tokens = [tok for tok in q.split() if tok]
+    if not name_tokens:
         return "Please include the player's name."
+
     matches = []
-    for pid, meta in _PLAYER_CACHE.items():
-        if not isinstance(meta, dict): continue
-        full = (meta.get("full_name") or "").lower()
-        if all(tok in full for tok in tokens):
-            matches.append(meta)
-    # fuzzy fallback
-    if not matches:
-        for pid, meta in _PLAYER_CACHE.items():
-            if not isinstance(meta, dict): continue
-            full = (meta.get("full_name") or "").lower()
-            if any(tok in full for tok in tokens):
-                matches.append(meta)
+    player_cache = globals().get("_player_cache") or {}
+
+    for pid, info in player_cache.items():
+        try:
+            if not _player_matches_name(info, name_tokens):
+                continue
+            if pos_hint:
+                if (info.get("position") or "").upper() != pos_hint:
+                    continue
+            if team_hint and not _player_matches_team(info, team_hint):
+                continue
+            matches.append(info)
+        except Exception:
+            continue
+
+    if debug:
+        print("matches found:", len(matches))
+        for m in matches[:6]:
+            fn = (m.get("full_name") or f"{m.get('first_name','')} {m.get('last_name','')}").strip()
+            print(" -", fn, m.get("position"), m.get("team"))
+
     if not matches:
         return f"Player '{user_input}' not found."
+
+    # Save matched profiles in dataframe and prepare outputs
     outputs = []
-    for p in matches[:10]:
-        full = (p.get("full_name") or f"{p.get('first_name','')} {p.get('last_name','')}").title()
+    for p in matches:
+        full_name = (p.get("full_name") or f"{p.get('first_name','')} {p.get('last_name','')}").strip().title()
         profile = {
-            "Name": full,
+            "Name": full_name,
             "Age": p.get("age", "N/A"),
             "Position": (p.get("position") or "N/A").upper(),
-            "Team": p.get("team") or "N/A",
-            "College": p.get("college") or "N/A",
-            "Years_in_NFL": p.get("years_exp") or "N/A"
+            "Team": p.get("team", "N/A"),
+            "College": p.get("college", "N/A"),
+            "Years_in_NFL": p.get("years_exp", "N/A")
         }
         save_player_profile(profile)
         outputs.append(profile)
+
+    # If exactly one found -> return formatted text for it
     if len(outputs) == 1:
         p = outputs[0]
-        return (f"**Name:** {p['Name']}\n- **Age:** {p['Age']}\n- **Position:** {p['Position']}\n- **Team:** {p['Team']}\n- **College:** {p['College']}\n- **Years in NFL:** {p['Years_in_NFL']}")
-    lines = ["Multiple players found (be more specific):"]
+        return (
+            f"**Name:** {p['Name']}\n"
+            f"- **Age:** {p['Age']}\n"
+            f"- **Position:** {p['Position']}\n"
+            f"- **Team:** {p['Team']}\n"
+            f"- **College:** {p['College']}\n"
+            f"- **Years in NFL:** {p['Years_in_NFL']}"
+        )
+
+    # multiple matches -> short list
+    lines = ["Multiple players found:"]
+    # Show at most 5 matches for brevity
     for p in outputs[:5]:
         lines.append(f"- {p['Name']} ({p['Position']} — {p['Team']})")
+
     if len(outputs) > 5:
-        lines.append(f"...and {len(outputs)-5} more")
+        lines.append(f"(...{len(outputs) - 5} more matches)")
+
     return "\n".join(lines)

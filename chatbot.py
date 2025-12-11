@@ -4,6 +4,7 @@ Imports api_client and routes user queries
 """
 
 import re
+from utils import clean_query
 from api_client import (
     get_live_scores,
     get_standings,
@@ -45,8 +46,12 @@ def handle_user_query(q: str):
         return get_last_game(team)
 
     # Player
-    if "who is" in q_low or "player" in q_low:
-        return get_player_profile_smart(q)
+    if "who is" in q_low or "player" in q_low or "about" in q_low or "profile" in q_low:
+        # Extract the relevant name/query part after removing trigger phrases
+        q = clean_query(q)
+        if not q:
+            return "Please provide a player's name and optional team/position."
+        return get_player_profile_smart(q, debug=False) # Pass the cleaned query to the smart lookup
 
     # Fantasy
     if "fantasy" in q_low:
