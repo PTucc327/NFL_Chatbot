@@ -70,52 +70,60 @@ _PLAYER_CACHE_LAST = 0
 # -------------------------
 # Team cache
 # -------------------------
-def ensure_team_cache(force: bool = False):
+def ensure_team_cache():
+    """Populate _team_cache with keys mapping to team metadata (id, displayName, abbr, slug, schedule_url)."""
     global _TEAM_CACHE, _TEAM_CACHE_LAST
     now = time.time()
-    if _TEAM_CACHE and (now - _TEAM_CACHE_LAST) < CACHE_TTL and not force:
+    if _TEAM_CACHE and now - _TEAM_CACHE_LAST < CACHE_TTL:
         return
     _TEAM_CACHE = {}
-    _TEAM_CACHE_LAST = now
     data = fetch_json(ESPN_TEAMS_URL)
     if "__error" in data:
+        _TEAM_CACHE_LAST = now
         return
     teams = []
-    try:
-        sports = data.get("sports", [])
-        if sports:
-            leagues = sports[0].get("leagues", [])
+    if isinstance(data, dict):
+        try:
+            leagues = data.get("sports", [])[0].get("leagues", [])
             if leagues:
                 teams = leagues[0].get("teams", [])
-    except Exception:
-        teams = data.get("teams", []) or []
+        except Exception:
+            teams = data.get("teams", []) or []
+    elif isinstance(data, list):
+        teams = data
+
     for item in teams:
         team_obj = item.get("team") if isinstance(item, dict) and "team" in item else item
         if not isinstance(team_obj, dict):
             continue
-        tid = team_obj.get("id")
-        display = team_obj.get("displayName") or team_obj.get("name") or ""
+        team_id = team_obj.get("id")
+        display = team_obj.get("displayName") or team_obj.get("name") or team_obj.get("shortDisplayName")
         abbr = team_obj.get("abbreviation") or ""
         slug = team_obj.get("slug") or ""
-        schedule_url = f"https://site.api.espn.com/apis/site/v2/sports/football/nfl/teams/{tid}/schedule" if tid else None
-        meta = {"id": str(tid) if tid else None, "displayName": display, "abbr": abbr, "slug": slug, "schedule_url": schedule_url}
-        # keys to store for fuzzy matching
+        if not team_id:
+            continue
+        schedule_url = f"https://site.api.espn.com/apis/site/v2/sports/football/nfl/teams/{team_id}/schedule"
+        meta = {
+            "id": str(team_id),
+            "displayName": display,
+            "abbr": abbr,
+            "slug": slug,
+            "schedule_url": schedule_url
+        }
+        # store under several lookup keys (lowercased)
         keys = set()
-        if display: keys.add(display.lower())
-        if abbr: keys.add(abbr.lower())
-        if slug: keys.add(slug.lower())
-        # also store by last word (mascot) and short name tokens
         if display:
-            for part in re.split(r"[\s\-]+", display.lower()):
-                if part: keys.add(part)
-            mascot = display.lower().split()[-1]
-            keys.add(mascot)
+            keys.add(display.lower())
+        if abbr:
+            keys.add(abbr.lower())
+        if slug:
+            keys.add(slug.lower())
         for k in keys:
             _TEAM_CACHE[k] = meta
-        if tid:
-            _TEAM_CACHE[str(tid)] = meta
-
-
+        # also store under the numeric id string
+        _TEAM_CACHE[str(team_id)] = meta
+    _TEAM_CACHE_LAST = now
+    
 def find_team(query: Optional[str]) -> Optional[Dict[str, Any]]:
     if not query:
         return None
@@ -596,75 +604,106 @@ def get_standings(team_name: Optional[str] = None) -> str:
 # ----------------------------------------------------
 # Schedule lookups
 # ----------------------------------------------------
-def get_next_game(team: str):
-    meta = find_team(team)
+def get_next_game(team_name: str) -> str:
+    if not team_name:
+        return "Please include a team name."
+
+    meta = find_team(team_name)
     if not meta:
-        return f"Team '{team}' not found."
+        return f"Could not resolve team '{team_name}'."
 
-    sched = fetch_json(meta["schedule_url"])
-    events = sched.get("events", [])
+    sched_url = meta.get("schedule_url")
+    if not sched_url:
+        return f"Schedule unavailable for {meta.get('displayName')}."
+
+    data = fetch_json(sched_url)
+    if "__error" in data:
+        return f"Error fetching schedule: {data['__error']}"
+
+    events = data.get("events") or data.get("items") or []
+    if not events:
+        return f"No schedule data found for {meta['displayName']}."
+
     now = datetime.datetime.now(datetime.timezone.utc)
-    future = []
 
+    future_games = []
     for ev in events:
         dt = parse_iso_datetime(ev.get("date"))
         if dt and dt > now:
-            future.append((dt, ev))
+            future_games.append((dt, ev))
 
-    if not future:
-        return "No upcoming games."
+    if not future_games:
+        return f"No upcoming games found for {meta['displayName']}."
 
-    future.sort()
-    dt, ev = future[0]
+    future_games.sort(key=lambda x: x[0])
+    dt, ev = future_games[0]
 
-    comp = ev.get("competitions", [ev])[0]
-    comps = comp.get("competitors", [])
+    comp = (ev.get("competitions") or [None])[0]
+    competitors = comp.get("competitors", []) if comp else []
 
-    opponent = ""
-    homeaway = ""
+    opponent = "Unknown"
+    home_away = ""
 
-    for c in comps:
-        name = c.get("team", {}).get("displayName", "")
-        if name.lower() == meta["name"].lower():
-            homeaway = c.get("homeAway")
+    for c in competitors:
+        team = c.get("team", {})
+        name = team.get("displayName", "")
+        if meta["displayName"].lower() in name.lower():
+            home_away = c.get("homeAway", "")
         else:
             opponent = name
 
-    side = "at home" if homeaway == "home" else "away"
+    when = to_et(dt)
+    ha_text = "at home" if home_away == "home" else "away" if home_away == "away" else ""
 
-    return f"Next game for {meta['name']}: {side} vs {opponent} on {to_et(dt)}."
+    return f"Next game for {meta['displayName']}: {ha_text} vs {opponent} on {when}."
 
 
-def get_last_game(team: str):
-    meta = find_team(team)
+def get_last_game(team_name: str) -> str:
+    if not team_name:
+        return "Please include a team name."
+
+    meta = find_team(team_name)
     if not meta:
-        return f"Team '{team}' not found."
+        return f"Could not resolve team '{team_name}'."
 
-    sched = fetch_json(meta["schedule_url"])
-    events = sched.get("events", [])
+    sched_url = meta.get("schedule_url")
+    if not sched_url:
+        return f"Schedule unavailable for {meta.get('displayName')}."
+
+    data = fetch_json(sched_url)
+    if "__error" in data:
+        return f"Error fetching schedule: {data['__error']}"
+
+    events = data.get("events") or data.get("items") or []
+    if not events:
+        return f"No schedule data found for {meta['displayName']}."
+
     now = datetime.datetime.now(datetime.timezone.utc)
 
-    past = []
+    past_games = []
     for ev in events:
         dt = parse_iso_datetime(ev.get("date"))
-        if dt and dt < now:
-            past.append((dt, ev))
+        if dt and dt <= now:
+            past_games.append((dt, ev))
 
-    if not past:
-        return "No past games."
+    if not past_games:
+        return f"No completed games found for {meta['displayName']}."
 
-    past.sort(reverse=True)
-    dt, ev = past[0]
+    past_games.sort(key=lambda x: x[0], reverse=True)
+    dt, ev = past_games[0]
 
-    comp = ev.get("competitions", [ev])[0]
+    comp = (ev.get("competitions") or [None])[0]
+    competitors = comp.get("competitors", []) if comp else []
+
     lines = []
-    for c in comp.get("competitors", []):
-        name = c.get("team", {}).get("displayName", "")
-        score = c.get("score", "")
+    for c in competitors:
+        team = c.get("team", {})
+        name = team.get("displayName", "Unknown")
+        score = c.get("score", "0")
         lines.append(f"{name} {score}")
 
-    return f"Last game for {meta['name']} on {to_et(dt)}: " + " - ".join(lines)
-
+    when = to_et(dt)
+    return f"Last game for {meta['displayName']} on {when}: " + " – ".join(lines)
 
 # ----------------------------------------------------
 # Player lookup + fantasy (Sleeper)
@@ -672,54 +711,79 @@ def get_last_game(team: str):
 # (copy your full get_player_profile_smart and get_fantasy_player_stats here)
 def get_fantasy_player_stats(query_name: Optional[str] = None) -> str:
     _ensure_player_cache()
+
     if not query_name:
-        return "Please specify a player name. Example: 'Fantasy stats for Patrick Mahomes'"
+        return "Please specify a player name. Example: 'Fantasy stats for Josh Allen'"
+
     # Normalize query
     q = query_name.lower()
     q = re.sub(r"[^a-z0-9\s]", " ", q)
     q = re.sub(r"\s+", " ", q).strip()
-    tokens = [t for t in q.split() if t]
+    tokens = q.split()
+
     if not tokens:
         return "Could not determine player from query."
-    # fetch season stats from Sleeper (current year)
+
+    # Fantasy-relevant positions ONLY
+    VALID_POSITIONS = {"QB", "RB", "WR", "TE"}
+
+    # Fetch season stats
     year = datetime.datetime.now().year
-    url = SLEEPER_STATS_URL_TEMPLATE.format(year=year)
-    stats = fetch_json(url)
+    stats = fetch_json(SLEEPER_STATS_URL_TEMPLATE.format(year=year))
+
     if "__error" in stats:
         return f"Error fetching fantasy stats: {stats['__error']}"
-    results = []
-    # search player cache for matching players
-    player_entries = []
-    for pid, meta in _PLAYER_CACHE.items():
-        # skip alias keys where value isn't a dict (we stored both id->meta and name->meta)
+
+    exact_matches = []
+    partial_matches = []
+
+    for meta in _PLAYER_CACHE.values():
         if not isinstance(meta, dict):
             continue
+
+        pos = (meta.get("position") or "").upper()
+        if pos not in VALID_POSITIONS:
+            continue
+
         full = (meta.get("full_name") or "").lower()
-        if all(tok in full for tok in tokens):
-            player_entries.append((pid, meta))
-    # try to match by simple token membership in name fields if none found
-    if not player_entries:
-        for pid, meta in _PLAYER_CACHE.items():
-            if not isinstance(meta, dict): continue
-            full = (meta.get("full_name") or "").lower()
-            if any(tok in full for tok in tokens):
-                player_entries.append((pid, meta))
-    # gather stats for matches
-    for pid, meta in player_entries:
-        stats_rec = {}
-        if isinstance(stats, dict):
-            stats_rec = stats.get(str(pid)) or stats.get(pid) or {}
-        # try common fantasy keys used by Sleeper
-        pts = stats_rec.get("pts_ppr") or stats_rec.get("fantasy_points") or stats_rec.get("points") or stats_rec.get("pass_yds") or "N/A"
-        name = meta.get("full_name") or f"{meta.get('first_name','')} {meta.get('last_name','')}"
-        position = (meta.get("position") or "N/A").upper()
-        team = meta.get("team") or "FA"
-        results.append(f"{name} ({position}, {team}): **{pts} PPR**")
-    # dedupe & return
-    unique = sorted(set(results))
-    if not unique:
+
+        if full == q:
+            exact_matches.append(meta)
+        elif all(tok in full for tok in tokens):
+            partial_matches.append(meta)
+
+    candidates = exact_matches or partial_matches
+
+    if not candidates:
         return f"No fantasy stats found for '{query_name}'."
-    return "\n".join(unique[:5])
+
+    outputs = []
+
+    for p in candidates:
+        pid = p["id"]
+        stat = stats.get(str(pid), {})
+
+        pts = (
+            stat.get("pts_ppr")
+            or stat.get("fantasy_points")
+            or stat.get("points")
+        )
+
+        if pts is None:
+            continue
+
+        name = p["full_name"]
+        pos = p["position"]
+        team = p.get("team", "FA")
+
+        outputs.append((pts, f"{name} ({pos}, {team}): **{round(float(pts), 2)} PPR**"))
+
+    if not outputs:
+        return f"No usable fantasy stats found for '{query_name}'."
+
+    # Sort by points descending and return BEST match
+    outputs.sort(key=lambda x: x[0], reverse=True)
+    return outputs[0][1]
 
 
 # -------------------------
@@ -734,24 +798,13 @@ def save_player_profile(profile_dict: Dict[str, Any]):
 
 # Helper functions for robust player lookup
 
-def _normalize_query(q: str) -> str:
-    q = q.lower().strip()
-    # remove punctuation
+def _normalize_player_query(q: str) -> str:
+    q = (q or "").lower().strip()
     q = re.sub(r"[^a-z0-9\s]", " ", q)
-    # collapse whitespace
     q = re.sub(r"\s+", " ", q).strip()
-
-    # --- UPDATED: Added more human-like filler words to strip ---
-    for w in (
-        "who is", "tell me about", "show me", "give me",
-        "player", "on the", "in the", "from", "team", "the",
-        "for", "fantasy", "stats", "ppr", "pts",
-        "qb for", "wr for", "rb for", "te for", "k for"
-    ):
-        # Use word boundaries (\b) to avoid removing parts of a name (e.g., 'who is' vs 'whis')
-        # but since we are replacing single-word tokens in a loop, a simple replace is faster.
+    # strip common long phrases
+    for w in ("who is", "tell me about", "player", "fantasy", "stats", "for"):
         q = q.replace(w, " ")
-
     q = re.sub(r"\s+", " ", q).strip()
     return q
 
@@ -782,7 +835,7 @@ def _detect_team_from_query(query: str, debug=False) -> Optional[str]:
 
     # try to find team via team cache (if available)
     try:
-        _ensure_team_cache()
+        ensure_team_cache()
     except Exception:
         pass
 
@@ -803,7 +856,7 @@ def _detect_team_from_query(query: str, debug=False) -> Optional[str]:
 
     return None
 
-def _player_matches_name(info: Dict[str, Any], name_tokens: List[str]) -> bool:
+def player_matches_name(info: Dict[str, Any], name_tokens: List[str]) -> bool:
     """Check if all name tokens are present in player's name fields."""
     first = (info.get("first_name") or "").lower().strip()
     last = (info.get("last_name") or "").lower().strip()
@@ -813,7 +866,7 @@ def _player_matches_name(info: Dict[str, Any], name_tokens: List[str]) -> bool:
     # All tokens must be present in the full name string
     return all(tok in full for tok in name_tokens)
 
-def _player_matches_team(info: Dict[str, Any], team_filter: str) -> bool:
+def player_matches_team(info: Dict[str, Any], team_filter: str) -> bool:
     """Check if player's team matches the normalized team filter (abbr, full, or short name)."""
     if not team_filter:
         return True
@@ -821,7 +874,7 @@ def _player_matches_team(info: Dict[str, Any], team_filter: str) -> bool:
     if team_filter in team_field:
         return True
     try:
-        _ensure_team_cache()
+        ensure_team_cache()
         for k, v in (globals().get("_team_cache") or {}).items():
             dn = (v.get("displayName") or "").lower()
             ab = (v.get("abbr") or "").lower()
@@ -834,100 +887,81 @@ def _player_matches_team(info: Dict[str, Any], team_filter: str) -> bool:
     return False
 
 
-def get_player_profile_smart(user_input: str, debug: bool=False) -> str:
-    """
-    Robust player lookup:
-      - normalize input
-      - extract position hint (optional)
-      - extract team hint (optional)
-      - gather all name matches, then filter by position/team if provided
-      - save matched profiles to player_df (internal)
-      - return a readable string (single profile or short list)
-    """
-    try:
-        _ensure_player_cache()
-    except Exception as e:
-        if debug: print(f"Error calling _ensure_player_cache: {e}")
-        pass
+def get_player_profile_smart(user_input: str, debug: bool = False) -> str:
+    _ensure_player_cache()
 
     if not user_input or not user_input.strip():
         return "Please provide a player name."
 
-    q = _normalize_query(user_input)
-    if debug: print("normalized query:", q)
+    q = _normalize_player_query(user_input)
+    tokens = [t for t in q.split() if t]
 
-    pos_hint, q = _detect_position_and_strip(q)
-    if debug: print("pos_hint:", pos_hint, "remaining:", q)
-
-    team_hint = _detect_team_from_query(q, debug=debug)
-    if team_hint:
-        q = q.replace(team_hint, " ").strip()
-        q = re.sub(r"\s+", " ", q)
-    if debug: print("team_hint:", team_hint, "name part:", q)
-
-    name_tokens = [tok for tok in q.split() if tok]
-    if not name_tokens:
+    if not tokens:
         return "Please include the player's name."
 
+    # -------------------------------------------------
+    # Collect UNIQUE players by ID (fixes duplicates)
+    # -------------------------------------------------
+    seen_ids = set()
     matches = []
-    player_cache = globals().get("_player_cache") or {}
 
-    for pid, info in player_cache.items():
-        try:
-            if not _player_matches_name(info, name_tokens):
-                continue
-            if pos_hint:
-                if (info.get("position") or "").upper() != pos_hint:
-                    continue
-            if team_hint and not _player_matches_team(info, team_hint):
-                continue
-            matches.append(info)
-        except Exception:
+    for key, meta in _PLAYER_CACHE.items():
+        if not isinstance(meta, dict):
             continue
 
-    if debug:
-        print("matches found:", len(matches))
-        for m in matches[:6]:
-            fn = (m.get("full_name") or f"{m.get('first_name','')} {m.get('last_name','')}").strip()
-            print(" -", fn, m.get("position"), m.get("team"))
+        pid = meta.get("id")
+        if not pid or pid in seen_ids:
+            continue
+
+        full = (meta.get("full_name") or "").lower()
+
+        if all(tok in full for tok in tokens):
+            matches.append(meta)
+            seen_ids.add(pid)
+
+    # Fuzzy fallback
+    if not matches:
+        for key, meta in _PLAYER_CACHE.items():
+            if not isinstance(meta, dict):
+                continue
+
+            pid = meta.get("id")
+            if not pid or pid in seen_ids:
+                continue
+
+            full = (meta.get("full_name") or "").lower()
+            if any(tok in full for tok in tokens):
+                matches.append(meta)
+                seen_ids.add(pid)
 
     if not matches:
         return f"Player '{user_input}' not found."
 
-    # Save matched profiles in dataframe and prepare outputs
-    outputs = []
-    for p in matches:
-        full_name = (p.get("full_name") or f"{p.get('first_name','')} {p.get('last_name','')}").strip().title()
-        profile = {
-            "Name": full_name,
-            "Age": p.get("age", "N/A"),
-            "Position": (p.get("position") or "N/A").upper(),
-            "Team": p.get("team", "N/A"),
-            "College": p.get("college", "N/A"),
-            "Years_in_NFL": p.get("years_exp", "N/A")
-        }
-        save_player_profile(profile)
-        outputs.append(profile)
-
-    # If exactly one found -> return formatted text for it
-    if len(outputs) == 1:
-        p = outputs[0]
+    # -------------------------------------------------
+    # Single result → detailed profile
+    # -------------------------------------------------
+    if len(matches) == 1:
+        p = matches[0]
         return (
-            f"**Name:** {p['Name']}\n"
-            f"- **Age:** {p['Age']}\n"
-            f"- **Position:** {p['Position']}\n"
-            f"- **Team:** {p['Team']}\n"
-            f"- **College:** {p['College']}\n"
-            f"- **Years in NFL:** {p['Years_in_NFL']}"
+            f"**Name:** {p.get('full_name').title()}\n"
+            f"- **Age:** {p.get('age', 'N/A')}\n"
+            f"- **Position:** {p.get('position', 'N/A').upper()}\n"
+            f"- **Team:** {p.get('team', 'N/A')}\n"
+            f"- **College:** {p.get('college', 'N/A')}\n"
+            f"- **Years in NFL:** {p.get('years_exp', 'N/A')}"
         )
 
-    # multiple matches -> short list
-    lines = ["Multiple players found:"]
-    # Show at most 5 matches for brevity
-    for p in outputs[:5]:
-        lines.append(f"- {p['Name']} ({p['Position']} — {p['Team']})")
+    # -------------------------------------------------
+    # Multiple unique players → clean list
+    # -------------------------------------------------
+    lines = ["Multiple players found. Be more specific:"]
+    for p in matches[:5]:
+        lines.append(
+            f"- {p.get('full_name').title()} "
+            f"({p.get('position', '').upper()}, {p.get('team', 'N/A')})"
+        )
 
-    if len(outputs) > 5:
-        lines.append(f"(...{len(outputs) - 5} more matches)")
+    if len(matches) > 5:
+        lines.append(f"...and {len(matches) - 5} more")
 
     return "\n".join(lines)

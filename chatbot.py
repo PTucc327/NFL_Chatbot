@@ -12,7 +12,8 @@ from api_client import (
     get_last_game,
     get_team_news,
     get_player_profile_smart,
-    get_fantasy_player_stats
+    get_fantasy_player_stats,
+
 )
 
 
@@ -20,26 +21,28 @@ def handle_user_query(q: str):
     if not q:
         return "How can I help with NFL info?"
 
-    q_low = q.lower()
+    q_low = q.strip().lower()
 
     # Scores
-    if "score" in q_low or "game" in q_low:
+    if "score" in q_low or "scores" in q_low:
         return get_live_scores()
 
     # Standings
-    if "standing" in q_low or "rank" in q_low:
+    if "standing" in q_low or "rank" in q_low or "record" in q_low:
         team = extract_team(q)
         return get_standings(team)
 
     # News
-    if "news" in q_low:
+    if "news" in q_low or "article" in q_low or "headline" in q_low:
         team = extract_team(q)
         return get_team_news(team)
 
     # Next game / last game
-    if "next game" in q_low:
-        team = extract_team(q)
-        return get_next_game(team)
+    if ("next" in q_low or "upcoming" in q_low or ("when" in q_low and "play" in q_low)) and ("play" in q_low or "game" in q_low or "schedule" in q_low):
+        t = extract_team(q)
+        if not t:
+            return "Please include a team name for 'next game' queries (e.g., 'Next game for Chiefs')."
+        return get_next_game(t)
 
     if "last game" in q_low:
         team = extract_team(q)
