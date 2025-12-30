@@ -822,7 +822,7 @@ def _detect_position_and_strip(query: str) -> Tuple[Optional[str], str]:
 
 # NOTE: _detect_team_from_query relies on the global _team_cache which is handled by _ensure_team_cache()
 
-def _detect_team_from_query(query: str, debug=False) -> Optional[str]:
+def detect_team_from_query(query: str, debug=False) -> Optional[str]:
     """
     Detect team token either from COMMON_TEAM_NAMES or from _team_cache (abbr/displayName/slug).
     Returns normalized team_token (like 'bills' or 'buf') or None.

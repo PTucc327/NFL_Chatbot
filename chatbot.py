@@ -16,8 +16,23 @@ from api_client import (
 
 )
 
-
+# -------------------------------------
+# Chatbot Query Handler
+# -------------------------------------
 def handle_user_query(q: str):
+    """
+    Docstring for handle_user_query
+    
+    :param q: Description
+    :type q: str
+
+    Works the following way:
+    Query: News Cowboys
+    result = get_team_news("Cowboys")
+
+    Query: Standings Giants
+    result = get_standings("Giants")
+    """
     if not q:
         return "How can I help with NFL info?"
 

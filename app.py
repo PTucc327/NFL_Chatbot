@@ -14,7 +14,6 @@ st.set_page_config(
 ensure_team_cache()
 TEAM_NAMES = sorted(list({meta["name"] for meta in _TEAM_CACHE.values() if "name" in meta}))
 
-
 # -------------------------------------
 # UI Header
 # -------------------------------------
