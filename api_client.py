@@ -23,7 +23,8 @@ from utils import (
     to_et,
     trend_indicator,
     clean_query,
-    CACHE_TTL
+    CACHE_TTL,
+    is_fuzzy_match
 )
 
 # ------------------------- #
@@ -708,17 +709,14 @@ def get_last_game(team_name: str) -> str:
 # ----------------------------------------------------
 # Player lookup + fantasy (Sleeper)
 # ----------------------------------------------------
-# (copy your full get_player_profile_smart and get_fantasy_player_stats here)
 def get_fantasy_player_stats(query_name: Optional[str] = None) -> str:
     _ensure_player_cache()
 
     if not query_name:
         return "Please specify a player name. Example: 'Fantasy stats for Josh Allen'"
 
-    # Normalize query
-    q = query_name.lower()
-    q = re.sub(r"[^a-z0-9\s]", " ", q)
-    q = re.sub(r"\s+", " ", q).strip()
+    # Normalize query using the local helper logic
+    q = _normalize_player_query(query_name)
     tokens = q.split()
 
     if not tokens:
@@ -736,9 +734,16 @@ def get_fantasy_player_stats(query_name: Optional[str] = None) -> str:
 
     exact_matches = []
     partial_matches = []
+    fuzzy_matches = []
+    seen_ids = set()
 
+    # Pass 1: Strict Token Matching
     for meta in _PLAYER_CACHE.values():
         if not isinstance(meta, dict):
+            continue
+
+        pid = meta.get("id")
+        if not pid or pid in seen_ids:
             continue
 
         pos = (meta.get("position") or "").upper()
@@ -749,16 +754,37 @@ def get_fantasy_player_stats(query_name: Optional[str] = None) -> str:
 
         if full == q:
             exact_matches.append(meta)
+            seen_ids.add(pid)
         elif all(tok in full for tok in tokens):
             partial_matches.append(meta)
+            seen_ids.add(pid)
 
-    candidates = exact_matches or partial_matches
+    # Pass 2: Fuzzy matching fallback (runs if no strict matches found)
+    if not (exact_matches or partial_matches):
+        from utils import is_fuzzy_match
+        for meta in _PLAYER_CACHE.values():
+            if not isinstance(meta, dict):
+                continue
+                
+            pid = meta.get("id")
+            if not pid or pid in seen_ids:
+                continue
+
+            pos = (meta.get("position") or "").upper()
+            if pos not in VALID_POSITIONS:
+                continue
+
+            full = (meta.get("full_name") or "").lower()
+            if is_fuzzy_match(q, full, threshold=80):
+                fuzzy_matches.append(meta)
+                seen_ids.add(pid)
+
+    candidates = exact_matches or partial_matches or fuzzy_matches
 
     if not candidates:
         return f"No fantasy stats found for '{query_name}'."
 
     outputs = []
-
     for p in candidates:
         pid = p["id"]
         stat = stats.get(str(pid), {})
@@ -888,11 +914,16 @@ def player_matches_team(info: Dict[str, Any], team_filter: str) -> bool:
 
 
 def get_player_profile_smart(user_input: str, debug: bool = False) -> str:
+    """
+    Robust player lookup that first attempts a strict match on all tokens,
+    then falls back to fuzzy matching to handle typos.
+    """
     _ensure_player_cache()
 
     if not user_input or not user_input.strip():
         return "Please provide a player name."
 
+    # Using the local NLU helper to strip filler words
     q = _normalize_player_query(user_input)
     tokens = [t for t in q.split() if t]
 
@@ -900,12 +931,14 @@ def get_player_profile_smart(user_input: str, debug: bool = False) -> str:
         return "Please include the player's name."
 
     # -------------------------------------------------
-    # Collect UNIQUE players by ID (fixes duplicates)
+    # Pass 1: Collect UNIQUE players by ID (Strict match)
     # -------------------------------------------------
     seen_ids = set()
     matches = []
 
-    for key, meta in _PLAYER_CACHE.items():
+    player_cache = globals().get("_PLAYER_CACHE") or globals().get("_player_cache") or {}
+
+    for key, meta in player_cache.items():
         if not isinstance(meta, dict):
             continue
 
@@ -915,13 +948,17 @@ def get_player_profile_smart(user_input: str, debug: bool = False) -> str:
 
         full = (meta.get("full_name") or "").lower()
 
+        # Check if ALL tokens from the query are present in the full name
         if all(tok in full for tok in tokens):
             matches.append(meta)
             seen_ids.add(pid)
 
-    # Fuzzy fallback
+    # -------------------------------------------------
+    # Pass 2: Fuzzy fallback (runs if Pass 1 found nothing)
+    # -------------------------------------------------
     if not matches:
-        for key, meta in _PLAYER_CACHE.items():
+        # We attempt to use the is_fuzzy_match utility from utils.py
+        for key, meta in player_cache.items():
             if not isinstance(meta, dict):
                 continue
 
@@ -930,7 +967,16 @@ def get_player_profile_smart(user_input: str, debug: bool = False) -> str:
                 continue
 
             full = (meta.get("full_name") or "").lower()
-            if any(tok in full for tok in tokens):
+            
+            # Use the fuzzy match utility if available, otherwise fallback to broad inclusion
+            try:
+                from utils import is_fuzzy_match
+                match_found = is_fuzzy_match(q, full, threshold=80)
+            except (ImportError, NameError):
+                # Fallback broad match: matches if any word from the query is in the full name
+                match_found = any(tok in full for tok in tokens)
+
+            if match_found:
                 matches.append(meta)
                 seen_ids.add(pid)
 
@@ -938,28 +984,44 @@ def get_player_profile_smart(user_input: str, debug: bool = False) -> str:
         return f"Player '{user_input}' not found."
 
     # -------------------------------------------------
-    # Single result → detailed profile
+    # Step 3: Single result -> detailed profile
     # -------------------------------------------------
     if len(matches) == 1:
         p = matches[0]
+        full_name = (p.get("full_name") or "Unknown").title()
+        
+        # Save to global DataFrame for analytical tracking
+        profile = {
+            "Name": full_name,
+            "Age": p.get("age", "N/A"),
+            "Position": (p.get("position", "N/A")).upper(),
+            "Team": p.get("team", "N/A"),
+            "College": p.get("college", "N/A"),
+            "Years_in_NFL": p.get("years_exp", "N/A")
+        }
+        try:
+            save_player_profile(profile)
+        except NameError:
+            pass
+            
         return (
-            f"**Name:** {p.get('full_name').title()}\n"
-            f"- **Age:** {p.get('age', 'N/A')}\n"
-            f"- **Position:** {p.get('position', 'N/A').upper()}\n"
-            f"- **Team:** {p.get('team', 'N/A')}\n"
-            f"- **College:** {p.get('college', 'N/A')}\n"
-            f"- **Years in NFL:** {p.get('years_exp', 'N/A')}"
+            f"**Name:** {full_name}\n"
+            f"- **Age:** {profile['Age']}\n"
+            f"- **Position:** {profile['Position']}\n"
+            f"- **Team:** {profile['Team']}\n"
+            f"- **College:** {profile['College']}\n"
+            f"- **Years in NFL:** {profile['Years_in_NFL']}"
         )
 
     # -------------------------------------------------
-    # Multiple unique players → clean list
+    # Step 4: Multiple unique players -> clean list
     # -------------------------------------------------
-    lines = ["Multiple players found. Be more specific:"]
+    lines = ["Multiple players found. Be more specific (e.g., include team or position):"]
     for p in matches[:5]:
-        lines.append(
-            f"- {p.get('full_name').title()} "
-            f"({p.get('position', '').upper()}, {p.get('team', 'N/A')})"
-        )
+        name = (p.get("full_name") or "Unknown").title()
+        pos = (p.get("position", "")).upper()
+        team = p.get("team", "N/A")
+        lines.append(f"- {name} ({pos}, {team})")
 
     if len(matches) > 5:
         lines.append(f"...and {len(matches) - 5} more")

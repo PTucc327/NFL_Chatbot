@@ -2,7 +2,7 @@
 Utility helpers for NFL Chatbot
 Used by api_client.py
 """
-
+from rapidfuzz import fuzz, process
 import time
 import datetime
 import re
@@ -16,6 +16,16 @@ except Exception:
 REQUEST_TIMEOUT = 10
 CACHE_TTL = 60 * 60 * 6   # 6 hours
 
+
+# -------------------------------------------------------------------
+
+
+def is_fuzzy_match(target: str, candidate: str, threshold: int = 80) -> bool:
+    """
+    Returns True if the candidate string matches the target above the threshold.
+    Uses token_set_ratio to handle name order variations (e.g., 'Mahomes Patrick').
+    """
+    return fuzz.token_set_ratio(target, candidate) >= threshold
 
 # -------------------------------------------------------------------
 # Safe JSON Fetch
