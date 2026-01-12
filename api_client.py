@@ -660,6 +660,7 @@ def get_next_game(team_name: str) -> str:
 
 
 def get_last_game(team_name: str) -> str:
+    
     if not team_name:
         return "Please include a team name."
 
@@ -668,19 +669,14 @@ def get_last_game(team_name: str) -> str:
         return f"Could not resolve team '{team_name}'."
 
     sched_url = meta.get("schedule_url")
-    if not sched_url:
-        return f"Schedule unavailable for {meta.get('displayName')}."
-
     data = fetch_json(sched_url)
     if "__error" in data:
         return f"Error fetching schedule: {data['__error']}"
 
     events = data.get("events") or data.get("items") or []
-    if not events:
-        return f"No schedule data found for {meta['displayName']}."
-
     now = datetime.datetime.now(datetime.timezone.utc)
 
+    # Filter for completed games
     past_games = []
     for ev in events:
         dt = parse_iso_datetime(ev.get("date"))
@@ -690,6 +686,7 @@ def get_last_game(team_name: str) -> str:
     if not past_games:
         return f"No completed games found for {meta['displayName']}."
 
+    # Sort to get the most recent game
     past_games.sort(key=lambda x: x[0], reverse=True)
     dt, ev = past_games[0]
 
@@ -698,14 +695,20 @@ def get_last_game(team_name: str) -> str:
 
     lines = []
     for c in competitors:
-        team = c.get("team", {})
-        name = team.get("displayName", "Unknown")
-        score = c.get("score", "0")
-        lines.append(f"{name} {score}")
+        team_display = c.get("team", {}).get("displayName", "Unknown")
+        score_data = c.get("score", "0")
+        
+        # --- FIX: Handle dictionary or string score format ---
+        if isinstance(score_data, dict):
+            # Extract '24' from {'value': 24.0, 'displayValue': '24'}
+            score = score_data.get("displayValue", str(score_data.get("value", "0")))
+        else:
+            score = str(score_data)
+            
+        lines.append(f"{team_display} {score}")
 
     when = to_et(dt)
-    return f"Last game for {meta['displayName']} on {when}: " + " – ".join(lines)
-
+    return f"Last game for **{meta['displayName']}** on {when}: " + " – ".join(lines)
 # ----------------------------------------------------
 # Player lookup + fantasy (Sleeper)
 # ----------------------------------------------------
@@ -1027,3 +1030,57 @@ def get_player_profile_smart(user_input: str, debug: bool = False) -> str:
         lines.append(f"...and {len(matches) - 5} more")
 
     return "\n".join(lines)
+
+
+# -------------------------
+# Contextual Memory
+#-------------------------
+
+def resolve_contextual_query(user_input: str, last_entity: Optional[str]) -> str:
+    """
+    Detects pronouns (his/her/him) or category-only shorthand (the stats)
+    and replaces them with the last mentioned entity name from memory.
+    """
+    ui = user_input.lower().strip()
+    
+    # Context-heavy triggers
+    pronouns = ["his ", "her ", "him ", "the stats", "record so far", "fantasy so far"]
+    
+    # Only resolve if the user is being vague AND we have someone in memory
+    if (any(p in ui for p in pronouns) or len(ui.split()) <= 2) and last_entity:
+        # Determine if the query is a follow-up about a category
+        is_followup = any(kw in ui for kw in ["stats", "fantasy", "record", "game", "standing", "rank"])
+        
+        if is_followup:
+            # Clean generic words and prepend the memory
+            clean = ui.replace("his ", "").replace("her ", "").replace("him ", "").strip()
+            return f"{last_entity} {clean}"
+            
+    return user_input
+
+def nfl_chatbot_with_context(user_input: str):
+    """
+    The main conversational router that manages subject memory turn-by-turn.
+    """
+    # 1. Break circular dependency: Move Streamlit import inside the function
+    import streamlit as st 
+    
+    # 2. Get the last mentioned subject from Session State
+    last_entity = st.session_state.get("last_mentioned")
+    
+    # 3. Resolve shorthand (e.g., 'his fantasy' -> 'Josh Allen fantasy')
+    resolved_query = resolve_contextual_query(user_input, last_entity)
+    
+    # 4. Route the resolved query to your main logic
+    from chatbot import handle_user_query
+    response = handle_user_query(resolved_query)
+    
+    # 5. Update Memory: If a name/team was mentioned, store it for the next turn
+    # Use existing NLU helpers for detection
+    from api_client import detect_team_from_query, _normalize_player_query
+    current_entity = detect_team_from_query(resolved_query) or _normalize_player_query(resolved_query)
+    
+    if current_entity:
+        st.session_state["last_mentioned"] = current_entity
+        
+    return response
