@@ -983,53 +983,39 @@ def get_player_profile_smart(user_input: str, debug: bool = False) -> str:
                 matches.append(meta)
                 seen_ids.add(pid)
 
+    # -------------------------------------------------
+    # Step 3: Handle Results
+    # -------------------------------------------------
     if not matches:
         return f"Player '{user_input}' not found."
 
-    # -------------------------------------------------
-    # Step 3: Single result -> detailed profile
-    # -------------------------------------------------
-    if len(matches) == 1:
-        p = matches[0]
-        full_name = (p.get("full_name") or "Unknown").title()
-        
-        # Save to global DataFrame for analytical tracking
-        profile = {
-            "Name": full_name,
-            "Age": p.get("age", "N/A"),
-            "Position": (p.get("position", "N/A")).upper(),
-            "Team": p.get("team", "N/A"),
-            "College": p.get("college", "N/A"),
-            "Years_in_NFL": p.get("years_exp", "N/A")
+    # NEW: Return structured data if multiple unique players are found
+    if len(matches) > 1:
+        return {
+            "type": "selection_required",
+            "matches": matches[:5] # Limit to top 5 for UI clarity
         }
-        try:
-            save_player_profile(profile)
-        except NameError:
-            pass
-            
-        return (
-            f"**Name:** {full_name}\n"
-            f"- **Age:** {profile['Age']}\n"
-            f"- **Position:** {profile['Position']}\n"
-            f"- **Team:** {profile['Team']}\n"
-            f"- **College:** {profile['College']}\n"
-            f"- **Years in NFL:** {profile['Years_in_NFL']}"
-        )
 
-    # -------------------------------------------------
-    # Step 4: Multiple unique players -> clean list
-    # -------------------------------------------------
-    lines = ["Multiple players found. Be more specific (e.g., include team or position):"]
-    for p in matches[:5]:
-        name = (p.get("full_name") or "Unknown").title()
-        pos = (p.get("position", "")).upper()
-        team = p.get("team", "N/A")
-        lines.append(f"- {name} ({pos}, {team})")
-
-    if len(matches) > 5:
-        lines.append(f"...and {len(matches) - 5} more")
-
-    return "\n".join(lines)
+    # Single result -> return standard detailed profile string
+    p = matches[0]
+    full_name = (p.get("full_name") or "Unknown").title()
+    profile = {
+        "Name": full_name,
+        "Age": p.get("age", "N/A"),
+        "Position": (p.get("position", "N/A")).upper(),
+        "Team": p.get("team", "N/A"),
+        "College": p.get("college", "N/A"),
+        "Years_in_NFL": p.get("years_exp", "N/A")
+    }
+    
+    return (
+        f"**Name:** {full_name}\n"
+        f"- **Age:** {profile['Age']}\n"
+        f"- **Position:** {profile['Position']}\n"
+        f"- **Team:** {profile['Team']}\n"
+        f"- **College:** {profile['College']}\n"
+        f"- **Years in NFL:** {profile['Years_in_NFL']}"
+    )
 
 
 # -------------------------
@@ -1037,50 +1023,51 @@ def get_player_profile_smart(user_input: str, debug: bool = False) -> str:
 #-------------------------
 
 def resolve_contextual_query(user_input: str, last_entity: Optional[str]) -> str:
-    """
-    Detects pronouns (his/her/him) or category-only shorthand (the stats)
-    and replaces them with the last mentioned entity name from memory.
-    """
     ui = user_input.lower().strip()
     
-    # Context-heavy triggers
-    pronouns = ["his ", "her ", "him ", "the stats", "record so far", "fantasy so far"]
-    
-    # Only resolve if the user is being vague AND we have someone in memory
-    if (any(p in ui for p in pronouns) or len(ui.split()) <= 2) and last_entity:
-        # Determine if the query is a follow-up about a category
-        is_followup = any(kw in ui for kw in ["stats", "fantasy", "record", "game", "standing", "rank"])
+    # If user asks a generic follow-up like "who is he?" or "fantasy?"
+    # and we have a subject in memory
+    if last_entity:
+        # Catch specific follow-up intents
+        intents = {
+            "fantasy": ["fantasy", "stats", "ppr", "points"],
+            "news": ["news", "headlines", "articles"],
+            "schedule": ["last game", "next game", "when do they play"]
+        }
         
-        if is_followup:
-            # Clean generic words and prepend the memory
-            clean = ui.replace("his ", "").replace("her ", "").replace("him ", "").strip()
-            return f"{last_entity} {clean}"
+        # Check if the user is just typing an intent word
+        if any(keyword in ui for group in intents.values() for keyword in group):
+            # Resolve to [Entity] + [Intent]
+            # Example: "last game" -> "Josh Allen last game"
+            return f"{last_entity} {ui}"
             
+        # Catch pronouns
+        if any(p in ui for p in ["he", "him", "his", "them", "they"]):
+            # Replace pronoun with entity
+            resolved = ui.replace("he", "").replace("him", "").replace("his", "").strip()
+            return f"{last_entity} {resolved}"
+
     return user_input
 
 def nfl_chatbot_with_context(user_input: str):
-    """
-    The main conversational router that manages subject memory turn-by-turn.
-    """
-    # 1. Break circular dependency: Move Streamlit import inside the function
     import streamlit as st 
     
-    # 2. Get the last mentioned subject from Session State
     last_entity = st.session_state.get("last_mentioned")
-    
-    # 3. Resolve shorthand (e.g., 'his fantasy' -> 'Josh Allen fantasy')
     resolved_query = resolve_contextual_query(user_input, last_entity)
     
-    # 4. Route the resolved query to your main logic
+    # Process query
     from chatbot import handle_user_query
     response = handle_user_query(resolved_query)
     
-    # 5. Update Memory: If a name/team was mentioned, store it for the next turn
-    # Use existing NLU helpers for detection
-    from api_client import detect_team_from_query, _normalize_player_query
-    current_entity = detect_team_from_query(resolved_query) or _normalize_player_query(resolved_query)
+    # --- FIXED CONTEXT LOGIC ---
+    # Only update memory if the CURRENT input contains a clear name or team
+    # DO NOT update memory using the 'resolved_query' or action words
+    new_entity = detect_team_from_query(user_input) or _normalize_player_query(user_input)
     
-    if current_entity:
-        st.session_state["last_mentioned"] = current_entity
+    # Filter out action words from the entity memory
+    # If new_entity is just "last game" or "fantasy", ignore it
+    actions = ["last game", "next game", "stats", "fantasy", "news", "scores"]
+    if new_entity and not any(a in new_entity.lower() for a in actions):
+        st.session_state["last_mentioned"] = new_entity
         
     return response

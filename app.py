@@ -79,15 +79,38 @@ if final_prompt:
     with st.chat_message("user"):
         st.markdown(final_prompt)
 
-    # B. Generate response using context-aware router
     with st.spinner("Analyzing NFL data..."):
         response = nfl_chatbot_with_context(final_prompt)
 
-    # C. Display bot response
-    with st.chat_message("assistant"):
-        st.markdown(response)
-    st.session_state.messages.append({"role": "assistant", "content": response})
+    # UI LOGIC: Handle Multi-Match Selection
+    if isinstance(response, dict) and response.get("type") == "selection_required":
+        with st.chat_message("assistant"):
+            st.write("I found multiple players. Which one did you mean?")
+            
+            # Use columns for a clean button layout
+            cols = st.columns(len(response["matches"]))
+            for idx, p in enumerate(response["matches"]):
+                label = f"{p['full_name']}\n({p['position']} - {p.get('team', 'FA')})"
+                
+                if cols[idx].button(label, key=f"sel_{p['id']}"):
+                    # 1. Lock in the NAME only (Josh Allen), not the whole metadata
+                    st.session_state["last_mentioned"] = p['full_name']
+                    
+                    # 2. Add a specialized system prompt to history to show it worked
+                    st.session_state.messages.append({"role": "assistant", "content": f"Locked in: **{p['full_name']}**. How can I help with them?"})
+                    
+                    # 3. Optional: Automatically show their profile now that context is set
+                    # This prevents the "I get nothing" error
+                    st.session_state["messages"].append({"role": "user", "content": f"Who is {p['full_name']}"})
+                    
+                    st.rerun()
+    else:
+        # Standard text response
+        with st.chat_message("assistant"):
+            st.markdown(response)
+        st.session_state.messages.append({"role": "assistant", "content": response})
 
+        
 # 7. Sidebar Subject Indicator (Optional)
 if st.session_state["last_mentioned"]:
     st.sidebar.markdown("---")
