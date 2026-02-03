@@ -30,7 +30,8 @@ action = st.sidebar.selectbox(
         "Next Game",
         "Last Game",
         "Fantasy Stats",
-        "Player Profile"
+        "Player Profile",
+        "Game Odds"
     ]
 )
 
@@ -45,7 +46,7 @@ if action in ["Standings", "Team News", "Next Game", "Last Game"]:
         elif action == "Team News": prompt_from_sidebar = f"{team_selection} news"
         elif action == "Next Game": prompt_from_sidebar = f"next game for {team_selection}"
         elif action == "Last Game": prompt_from_sidebar = f"last game for {team_selection}"
-
+        elif action == "Game Odds": prompt_from_sidebar = f"game odds for {team_selection}"
 # Scoreboard (Global)
 elif action == "Get Live Scores":
     if st.sidebar.button("Run Action"):
@@ -74,42 +75,34 @@ user_prompt = st.chat_input("Ask me about players, teams, or games...")
 final_prompt = prompt_from_sidebar or user_prompt
 
 if final_prompt:
-    # A. Display user message
+    # Add to history and display
     st.session_state.messages.append({"role": "user", "content": final_prompt})
     with st.chat_message("user"):
         st.markdown(final_prompt)
 
-    with st.spinner("Analyzing NFL data..."):
-        response = nfl_chatbot_with_context(final_prompt)
+    response = nfl_chatbot_with_context(final_prompt)
 
-    # UI LOGIC: Handle Multi-Match Selection
+    # UI LOGIC: Interactive Selection Buttons
     if isinstance(response, dict) and response.get("type") == "selection_required":
         with st.chat_message("assistant"):
-            st.write("I found multiple players. Which one did you mean?")
-            
-            # Use columns for a clean button layout
+            st.write("I found multiple players. Please select the correct one:")
             cols = st.columns(len(response["matches"]))
             for idx, p in enumerate(response["matches"]):
-                label = f"{p['full_name']}\n({p['position']} - {p.get('team', 'FA')})"
+                label = f"{p['full_name']}\\n({p['position']} - {p.get('team', 'FA')})"
                 
                 if cols[idx].button(label, key=f"sel_{p['id']}"):
-                    # 1. Lock in the NAME only (Josh Allen), not the whole metadata
+                    # A. Lock in ONLY the name (Josh Allen)
                     st.session_state["last_mentioned"] = p['full_name']
-                    
-                    # 2. Add a specialized system prompt to history to show it worked
-                    st.session_state.messages.append({"role": "assistant", "content": f"Locked in: **{p['full_name']}**. How can I help with them?"})
-                    
-                    # 3. Optional: Automatically show their profile now that context is set
-                    # This prevents the "I get nothing" error
-                    st.session_state["messages"].append({"role": "user", "content": f"Who is {p['full_name']}"})
-                    
+                    # B. Add a 'system' message to trigger the search on rerun
+                    st.session_state.messages.append({
+                        "role": "user", "content": f"Show profile for {p['full_name']}"
+                    })
                     st.rerun()
     else:
-        # Standard text response
+        # Standard chat response
         with st.chat_message("assistant"):
             st.markdown(response)
         st.session_state.messages.append({"role": "assistant", "content": response})
-
         
 # 7. Sidebar Subject Indicator (Optional)
 if st.session_state["last_mentioned"]:

@@ -13,7 +13,8 @@ from api_client import (
     get_team_news,
     get_player_profile_smart,
     get_fantasy_player_stats,
-
+    get_game_odds,
+     
 )
 
 # -------------------------------------
@@ -63,6 +64,7 @@ def handle_user_query(q: str):
         team = extract_team(q)
         return get_last_game(team)
 
+
     # Player
     if "who is" in q_low or "player" in q_low or "about" in q_low or "profile" in q_low:
         # Extract the relevant name/query part after removing trigger phrases
@@ -71,10 +73,18 @@ def handle_user_query(q: str):
             return "Please provide a player's name and optional team/position."
         return get_player_profile_smart(q, debug=False) # Pass the cleaned query to the smart lookup
 
+
     # Fantasy
     if "fantasy" in q_low:
         return get_fantasy_player_stats(q)
+    
 
+    # Odds / Betting Lines
+    if any(word in q_low for word in ["odds", "spread", "line", "over/under", "betting"]):
+        team = extract_team(q)
+        if not team:
+            return "Which team's odds are you looking for?"
+        return get_game_odds(team)
     return "I’m not sure what you need — try asking about scores, standings, news, games, or a player."
 
 

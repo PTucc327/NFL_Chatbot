@@ -7,6 +7,8 @@ Handles:
 - Player lookup
 - Fantasy stats
 - Schedule (next/last game)
+- Game odds
+- Player profiles
 """
 
 from typing import Optional, Dict, Any, List, Tuple
@@ -814,6 +816,32 @@ def get_fantasy_player_stats(query_name: Optional[str] = None) -> str:
     outputs.sort(key=lambda x: x[0], reverse=True)
     return outputs[0][1]
 
+# ------------------------
+# Game Odds
+# ------------------------
+def get_game_odds(team_name: str) -> str:
+    data = fetch_json(ESPN_SCOREBOARD_URL)
+    if not data:
+        return "⚠️ Betting data currently unavailable."
+
+    for event in data.get("events", []):
+        for competition in event.get("competitions", []):
+            teams = [c['team']['displayName'] for c in competition.get("competitors", [])]
+            
+            # Check if this is the game the user is asking about
+            if any(is_fuzzy_match(team_name, t) for t in teams):
+                odds_data = competition.get("odds", [])
+                if not odds_data:
+                    return f"The lines aren't out yet for the {team_name} game."
+                
+                # Extract spread and over/under
+                line = odds_data[0].get("details", "Pick'em")
+                ou = odds_data[0].get("overUnder", "TBD")
+                
+                return f"🏟️ **Betting Lines for {team_name}:**\n- **Spread:** {line}\n- **O/U:** {ou}"
+    
+    return f"I couldn't find an upcoming game with active odds for {team_name}."
+
 
 # -------------------------
 # Player Stats (Incorporated Fixed Logic)
@@ -1022,51 +1050,53 @@ def get_player_profile_smart(user_input: str, debug: bool = False) -> str:
 # Contextual Memory
 #-------------------------
 
-def resolve_contextual_query(user_input: str, last_entity: Optional[str]) -> str:
+def resolve_contextual_query(user_input: str, last_subject: Optional[str]) -> str:
+    """
+    Intelligently maps follow-up actions or pronouns to the current Subject.
+    Example: "last game" -> "Josh Allen last game"
+    """
+    if not last_subject:
+        return user_input
+    
     ui = user_input.lower().strip()
     
-    # If user asks a generic follow-up like "who is he?" or "fantasy?"
-    # and we have a subject in memory
-    if last_entity:
-        # Catch specific follow-up intents
-        intents = {
-            "fantasy": ["fantasy", "stats", "ppr", "points"],
-            "news": ["news", "headlines", "articles"],
-            "schedule": ["last game", "next game", "when do they play"]
-        }
+    # regex for pronouns to find them anywhere in the sentence
+    pronoun_pattern = r"\b(he|him|his|her|them|they|the team|this player| this team)\b"
+    
+    # Trigger if it's a short question ("fantasy stats?") or contains a pronoun ("who is he?")
+    if len(ui.split()) <= 2 or re.search(pronoun_pattern, ui):
         
-        # Check if the user is just typing an intent word
-        if any(keyword in ui for group in intents.values() for keyword in group):
-            # Resolve to [Entity] + [Intent]
-            # Example: "last game" -> "Josh Allen last game"
-            return f"{last_entity} {ui}"
+        # Scenario A: User used a pronoun. We SWAP it.
+        # "How tall is he?" -> "How tall is Josh Allen"
+        if re.search(pronoun_pattern, ui):
+            return re.sub(pronoun_pattern, last_subject, ui).strip()
             
-        # Catch pronouns
-        if any(p in ui for p in ["he", "him", "his", "them", "they"]):
-            # Replace pronoun with entity
-            resolved = ui.replace("he", "").replace("him", "").replace("his", "").strip()
-            return f"{last_entity} {resolved}"
-
+        # Scenario B: Short query. We ATTACH the subject.
+        # "stats?" -> "Josh Allen stats"
+        else:
+            return f"{last_subject} {ui}"
+            
     return user_input
 
 def nfl_chatbot_with_context(user_input: str):
     import streamlit as st 
     
-    last_entity = st.session_state.get("last_mentioned")
-    resolved_query = resolve_contextual_query(user_input, last_entity)
+    # 1. Get memory
+    last_subject = st.session_state.get("last_mentioned")
     
-    # Process query
+    # 2. Resolve Intent (e.g., swap 'his' for 'Josh Allen')
+    resolved_query = resolve_contextual_query(user_input, last_subject)
+    
+    # 3. Route to main processing
     from chatbot import handle_user_query
     response = handle_user_query(resolved_query)
     
-    # --- FIXED CONTEXT LOGIC ---
-    # Only update memory if the CURRENT input contains a clear name or team
-    # DO NOT update memory using the 'resolved_query' or action words
+    # 4. SUBJECT MEMORY UPDATE: Detect ONLY names or teams, NOT actions
+    # We detect from ORIGINAL input to see if user changed the topic
     new_entity = detect_team_from_query(user_input) or _normalize_player_query(user_input)
     
-    # Filter out action words from the entity memory
-    # If new_entity is just "last game" or "fantasy", ignore it
-    actions = ["last game", "next game", "stats", "fantasy", "news", "scores"]
+    # Guard: Prevent "last game" or "fantasy" from becoming the subject
+    actions = ["last game", "next game", "fantasy", "stats", "news", "scores", "standing"]
     if new_entity and not any(a in new_entity.lower() for a in actions):
         st.session_state["last_mentioned"] = new_entity
         

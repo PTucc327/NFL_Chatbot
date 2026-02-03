@@ -23,10 +23,25 @@ CACHE_TTL = 60 * 60 * 6   # 6 hours
 def is_fuzzy_match(target: str, candidate: str, threshold: int = 80) -> bool:
     """
     Returns True if the candidate string matches the target above the threshold.
-    Uses token_set_ratio to handle name order variations (e.g., 'Mahomes Patrick').
+    Optimized for player names using token_set_ratio.
     """
-    return fuzz.token_set_ratio(target, candidate) >= threshold
-
+    if not target or not candidate:
+        return False
+        
+    t_low = target.lower().strip()
+    c_low = candidate.lower().strip()
+    
+    # 1. Check for absolute match first (speed optimization)
+    if t_low == c_low:
+        return True
+        
+    # 2. Use token_set_ratio to handle word order and common typos
+    score = fuzz.token_set_ratio(t_low, c_low)
+    
+    # PERFORMANCE RECOMMENDATION: 
+    # Use 85 for Fantasy (to avoid mixing up similar names like 'Josh Allen' vs 'Josh J. Allen')
+    # Use 75 for General News (to be more forgiving of spelling)
+    return score >= threshold
 # -------------------------------------------------------------------
 # Safe JSON Fetch
 # -------------------------------------------------------------------
