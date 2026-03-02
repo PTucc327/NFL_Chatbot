@@ -1,11 +1,13 @@
 """
-NFL Chatbot router
-Imports api_client and routes user queries
+NFL Chatbot Router (Perfected Version)
+Handles intent recognition, entity extraction, and stateful orchestration.
 """
 
 import re
-from utils import clean_query
-from api_client import (
+import logging
+from typing import Optional
+from src.utils import clean_query
+from src.api_client import (
     get_live_scores,
     get_standings,
     get_next_game,
@@ -14,80 +16,111 @@ from api_client import (
     get_player_profile_smart,
     get_fantasy_player_stats,
     get_game_odds,
-     
+    find_team,
+    resolve_contextual_query,
+    detect_team_from_query,
+    _normalize_player_query
 )
 
+logger = logging.getLogger(__name__)
+
 # -------------------------------------
-# Chatbot Query Handler
+# Intent & Entity Logic
 # -------------------------------------
+
+def extract_team_advanced(text: str) -> Optional[str]:
+    """
+    Scans query for known team names/abbreviations.
+    Falls back to the last word only if no known team is found.
+    """
+    detected = detect_team_from_query(text)
+    if detected:
+        return detected
+        
+    # Fallback: simple extraction
+    words = text.strip().split()
+    return words[-1] if words else None
+
+# -------------------------------------
+# Main Orchestration
+# -------------------------------------
+
+def nfl_chatbot_with_context(user_input: str):
+    """
+    Professional Orchestrator:
+    1. Manages Streamlit session state
+    2. Resolves pronouns (contextual memory)
+    3. Routes to the correct API function
+    """
+    import streamlit as st 
+    
+    # 1. Retrieve memory
+    last_subject = st.session_state.get("last_mentioned")
+    
+    # 2. Contextual Resolution (e.g., 'his stats' -> 'Patrick Mahomes stats')
+    resolved_query = resolve_contextual_query(user_input, last_subject)
+    logger.info(f"Original: {user_input} | Resolved: {resolved_query}")
+    
+    # 3. Process Query
+    response = handle_user_query(resolved_query)
+    
+    # 4. Subject Update Guard
+    # We update the subject only if a specific player or team was detected
+    new_entity = detect_team_from_query(user_input) or _normalize_player_query(user_input)
+    
+    # Don't let generic action words become the 'subject'
+    forbidden_subjects = {"news", "stats", "scores", "standing", "fantasy", "odds", "game"}
+    if new_entity and new_entity.lower() not in forbidden_subjects:
+        st.session_state["last_mentioned"] = new_entity
+        
+    return response
+
 def handle_user_query(q: str):
     """
-    Docstring for handle_user_query
-    
-    :param q: Description
-    :type q: str
-
-    Works the following way:
-    Query: News Cowboys
-    result = get_team_news("Cowboys")
-
-    Query: Standings Giants
-    result = get_standings("Giants")
+    Structured Intent Router using Regex patterns.
     """
     if not q:
         return "How can I help with NFL info?"
 
     q_low = q.strip().lower()
 
-    # Scores
-    if "score" in q_low or "scores" in q_low:
+    # Intent: Live Scores
+    if re.search(r"\b(score|scores|scoreboard|who won)\b", q_low):
         return get_live_scores()
 
-    # Standings
-    if "standing" in q_low or "rank" in q_low or "record" in q_low:
-        team = extract_team(q)
-        return get_standings(team)
+    # Intent: Standings/Record
+    if re.search(r"\b(standing|rank|record|playoff seed)\b", q_low):
+        team = extract_team_advanced(q)
+        # If 'standing' is mentioned without a team, get global standings
+        return get_standings(team if team not in ["standing", "rank"] else None)
 
-    # News
-    if "news" in q_low or "article" in q_low or "headline" in q_low:
-        team = extract_team(q)
+    # Intent: News
+    if re.search(r"\b(news|article|headline|updates)\b", q_low):
+        team = extract_team_advanced(q)
         return get_team_news(team)
 
-    # Next game / last game
-    if ("next" in q_low or "upcoming" in q_low or ("when" in q_low and "play" in q_low)) and ("play" in q_low or "game" in q_low or "schedule" in q_low):
-        t = extract_team(q)
-        if not t:
-            return "Please include a team name for 'next game' queries (e.g., 'Next game for Chiefs')."
-        return get_next_game(t)
+    # Intent: Schedule (Next Game)
+    if re.search(r"\b(next|upcoming|when|play|schedule)\b", q_low) and "game" in q_low:
+        team = extract_team_advanced(q)
+        return get_next_game(team)
 
-    if "last game" in q_low:
-        team = extract_team(q)
+    # Intent: Recent History (Last Game)
+    if "last game" in q_low or "previous game" in q_low:
+        team = extract_team_advanced(q)
         return get_last_game(team)
 
-
-    # Player
-    if "who is" in q_low or "player" in q_low or "about" in q_low or "profile" in q_low:
-        # Extract the relevant name/query part after removing trigger phrases
-        q = clean_query(q)
-        if not q:
-            return "Please provide a player's name and optional team/position."
-        return get_player_profile_smart(q, debug=False) # Pass the cleaned query to the smart lookup
-
-
-    # Fantasy
+    # Intent: Fantasy Analysis
     if "fantasy" in q_low:
         return get_fantasy_player_stats(q)
-    
 
-    # Odds / Betting Lines
-    if any(word in q_low for word in ["odds", "spread", "line", "over/under", "betting"]):
-        team = extract_team(q)
-        if not team:
-            return "Which team's odds are you looking for?"
+    # Intent: Betting/Odds
+    if re.search(r"\b(odds|spread|line|over/under|betting)\b", q_low):
+        team = extract_team_advanced(q)
         return get_game_odds(team)
-    return "I’m not sure what you need — try asking about scores, standings, news, games, or a player."
 
+    # Intent: Player Profile (Catch-all for names)
+    if re.search(r"\b(who is|player|profile|about)\b", q_low) or len(q_low.split()) <= 2:
+        cleaned_name = clean_query(q)
+        return get_player_profile_smart(cleaned_name)
 
-def extract_team(text: str):
-    words = text.split()
-    return words[-1]
+    return "I’m not sure what you need — try asking about scores, standings, news, or a specific player."

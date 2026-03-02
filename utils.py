@@ -1,29 +1,30 @@
 """
-Utility helpers for NFL Chatbot
-Used by api_client.py
+Utility Helpers (Perfected Version)
+Core functions for Networking, Fuzzy Matching, and Time Conversion.
 """
-from rapidfuzz import fuzz, process
 import time
 import datetime
 import re
 import requests
+import logging
 from typing import Optional, Dict, Any
-try:
-    from zoneinfo import ZoneInfo
-except Exception:
-    ZoneInfo = None
+from rapidfuzz import fuzz
 
+# Set up logging for the engine room
+logger = logging.getLogger(__name__)
+
+# Constants
 REQUEST_TIMEOUT = 10
-CACHE_TTL = 60 * 60 * 6   # 6 hours
-
+MAX_RETRIES = 3
 
 # -------------------------------------------------------------------
+# Professional Fuzzy Matching
+# -------------------------------------------------------------------
 
-
-def is_fuzzy_match(target: str, candidate: str, threshold: int = 80) -> bool:
+def is_fuzzy_match(target: str, candidate: str, threshold: int = 85) -> bool:
     """
-    Returns True if the candidate string matches the target above the threshold.
-    Optimized for player names using token_set_ratio.
+    Uses token_set_ratio for high-accuracy matching.
+    Handles typos, word order, and middle initials common in NFL names.
     """
     if not target or not candidate:
         return False
@@ -31,94 +32,107 @@ def is_fuzzy_match(target: str, candidate: str, threshold: int = 80) -> bool:
     t_low = target.lower().strip()
     c_low = candidate.lower().strip()
     
-    # 1. Check for absolute match first (speed optimization)
+    # 1. Quick bypass for exact matches
     if t_low == c_low:
         return True
         
-    # 2. Use token_set_ratio to handle word order and common typos
+    # 2. Token Set Ratio is best for "Josh Allen" vs "Josh R. Allen"
     score = fuzz.token_set_ratio(t_low, c_low)
-    
-    # PERFORMANCE RECOMMENDATION: 
-    # Use 85 for Fantasy (to avoid mixing up similar names like 'Josh Allen' vs 'Josh J. Allen')
-    # Use 75 for General News (to be more forgiving of spelling)
     return score >= threshold
-# -------------------------------------------------------------------
-# Safe JSON Fetch
-# -------------------------------------------------------------------
-import traceback
 
-# -------------------------
-# Network helpers
-# -------------------------
-def safe_fetch_json(url: str, params: dict = None, headers: dict = None, retries: int = 3, timeout: int = REQUEST_TIMEOUT):
-    """Fetch JSON with simple retry/backoff; returns dict with '__error' on failure."""
-    attempt = 0
-    backoff = 1.0
-    while attempt < retries:
-        try:
-            r = requests.get(url, params=params, headers=headers, timeout=timeout)
-            r.raise_for_status()
-            return r.json()
-        except Exception as e:
-            attempt += 1
-            time.sleep(backoff)
-            backoff *= 2
-            last_err = e
-    return {"__error": f"Failed to fetch {url}: {last_err}"}
-
+# -------------------------------------------------------------------
+# Resilient Networking (With Backoff)
+# -------------------------------------------------------------------
 
 def fetch_json(url: str, params: dict = None, headers: dict = None) -> Dict[str, Any]:
-    return safe_fetch_json(url, params=params, headers=headers)
+    """
+    Fetches JSON with exponential backoff retries.
+    Prevents the bot from crashing during minor API hiccups.
+    """
+    attempt = 0
+    backoff = 1.0  # Start with 1 second wait
+    
+    while attempt < MAX_RETRIES:
+        try:
+            response = requests.get(
+                url, 
+                params=params, 
+                headers=headers, 
+                timeout=REQUEST_TIMEOUT
+            )
+            response.raise_for_status()
+            return response.json()
+            
+        except requests.exceptions.RequestException as e:
+            attempt += 1
+            if attempt == MAX_RETRIES:
+                logger.error(f"Final fetch failure for {url}: {e}")
+                return {"__error": str(e)}
+            
+            logger.warning(f"Fetch attempt {attempt} failed for {url}. Retrying in {backoff}s...")
+            time.sleep(backoff)
+            backoff *= 2  # Exponentially increase wait time
+            
+    return {"__error": "Unknown network error"}
 
+# -------------------------------------------------------------------
+# Time & Formatting Helpers
+# -------------------------------------------------------------------
 
-# -------------------------
-# Time helpers
-# -------------------------
 def parse_iso_datetime(dt_str: Optional[str]) -> Optional[datetime.datetime]:
+    """Robust ISO parser handling multiple NFL API formats."""
     if not dt_str:
         return None
     try:
-        # handle trailing Z
+        # Standard ISO format with Z
         if dt_str.endswith("Z"):
             dt_str = dt_str[:-1] + "+00:00"
         return datetime.datetime.fromisoformat(dt_str)
     except Exception:
-        # fallback common formats
-        for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ"):
+        # Fallback for older strptime formats
+        for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S.%fZ"):
             try:
                 return datetime.datetime.strptime(dt_str, fmt).replace(tzinfo=datetime.timezone.utc)
             except Exception:
                 continue
     return None
 
-
 def to_et(dt: Optional[datetime.datetime]) -> str:
+    """Converts UTC to Eastern Time with robust timezone handling."""
     if not dt:
         return "TBD"
+    
+    # Ensure UTC awareness
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=datetime.timezone.utc)
-    if ZoneInfo:
-        try:
-            et = dt.astimezone(ZoneInfo("America/New_York"))
-            return et.strftime("%I:%M %p %Z")
-        except Exception:
-            return dt.isoformat()
-    return dt.isoformat()
+        
+    try:
+        # Attempt to use modern ZoneInfo (Python 3.9+)
+        from zoneinfo import ZoneInfo
+        et_tz = ZoneInfo("America/New_York")
+    except ImportError:
+        # Fallback for older environments
+        from datetime import timezone, timedelta
+        et_tz = timezone(timedelta(hours=-5)) # Approximation of ET
 
+    et_dt = dt.astimezone(et_tz)
+    return et_dt.strftime("%I:%M %p ET")
 
 # -------------------------------------------------------------------
-# Generic helpers
+# Data Cleansing
 # -------------------------------------------------------------------
-def trend_indicator(pct):
-    if pct >= 0.700:
-        return "↑"
-    if pct <= 0.350:
-        return "↓"
-    return "•"
 
-
-def clean_query(text: str):
+def clean_query(text: str) -> str:
+    """Standardizes user input for entity matching."""
+    if not text:
+        return ""
+    # Lowercase, remove special chars, and strip extra whitespace
     text = text.lower()
     text = re.sub(r"[^a-z0-9\s]", " ", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
+    return " ".join(text.split())
+
+def trend_indicator(pct: float) -> str:
+    """Visual feedback for team performance."""
+    if pct >= 0.700: return "🔥" # Upgraded to more visual emojis
+    if pct <= 0.350: return "🧊"
+    return "•"
