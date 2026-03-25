@@ -1,6 +1,6 @@
 """
 NFL API Client (Full Conversational Version)
-Handles data retrieval from ESPN, Sleeper, and RSS feeds with a natural tone.
+Handles data retrieval from ESPN, Sleeper, and RSS feeds with a natural, AI-driven tone.
 """
 
 import datetime
@@ -102,7 +102,7 @@ def find_team(query: Optional[str]) -> Optional[Dict[str, Any]]:
     return None
 
 # ----------------------------------------------------
-# News & Scores (Concurrency & UI Fixes)
+# News & Scores (Conversational & Dynamic)
 # ----------------------------------------------------
 def _fetch_rss_thread(url: str) -> List[Dict[str, str]]:
     try:
@@ -114,11 +114,13 @@ def _fetch_rss_thread(url: str) -> List[Dict[str, str]]:
 
 def get_team_news(team_name: str) -> str:
     if not team_name: return "I'd love to find some news for you! Which team are we talking about? 🏈"
+    
     sources = [
         f"https://news.google.com/rss/search?q={team_name.replace(' ', '+')}+NFL",
         "https://sports.yahoo.com/nfl/rss.xml",
         "https://profootballtalk.nbcsports.com/feed/"
     ]
+    
     all_articles = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
         futures = {executor.submit(_fetch_rss_thread, url): url for url in sources}
@@ -128,10 +130,10 @@ def get_team_news(team_name: str) -> str:
     tokens = [team_name.lower()] + team_name.lower().split()
     
     intros = [
-        f"Here's what's buzzing for the {team_name.title()}:",
-        f"I found some fresh updates for the {team_name.title()}:",
-        f"The latest headlines for the {team_name.title()} are looking interesting:",
-        f"Checking the wire for the {team_name.title()}... here's what's up:"
+        f"I did some digging, and here's what's buzzing for the {team_name.title()}:",
+        f"I found some fresh updates that you might find interesting regarding the {team_name.title()}:",
+        f"The latest headlines for the {team_name.title()} are looking pretty active right now:",
+        f"Checking the wire for the {team_name.title()}... here's the word:"
     ]
 
     ranked = []
@@ -141,7 +143,8 @@ def get_team_news(team_name: str) -> str:
         if score > 0: ranked.append((score, art))
 
     ranked.sort(key=lambda x: x[0], reverse=True)
-    if not ranked: return f"Things are looking pretty quiet on the news front for the {team_name.title()} right now."
+    if not ranked: 
+        return f"Things are looking pretty quiet on the news front for the {team_name.title()} at the moment. I'll keep an eye out!"
     
     md = [f"📰 **{random.choice(intros)}**\n"]
     for _, a in ranked[:5]:
@@ -151,9 +154,10 @@ def get_team_news(team_name: str) -> str:
 
 def get_live_scores(team_name: Optional[str] = None):
     data = fetch_json(ENDPOINTS["scoreboard"])
-    if "__error" in data: return "I'm having a little trouble reaching the scoreboard right now. 🏈"
+    if "__error" in data: return "I'm having a little trouble reaching the live scoreboard right now. Hopefully, it's just a temporary timeout! 🏈"
+    
     events = data.get("events", [])
-    if not events: return "No games on the schedule today! A good day to catch up on highlights. 📺"
+    if not events: return "There aren't any games on the schedule for today! It's a perfect time to catch up on some highlights. 📺"
 
     team_q = clean_query(team_name) if team_name else None
     results = {"in": [], "post": [], "pre": []}
@@ -178,21 +182,26 @@ def get_live_scores(team_name: Optional[str] = None):
         if team_q and team_q not in (aw_name + hm_name).lower(): continue
         results[state].append(line)
 
-    out = [f"🏈 **Here's how today's action is looking:**\n"]
+    out = [f"🏈 **Here's the current situation on the field:**\n"]
     
     if results["in"]:
-        out.append("🟧 **Live Right Now:**")
-        out.extend([f"- {l.replace('@', 'visiting')}" for l in results["in"]])
+        out.append("🟧 **Live Action:**")
+        for l in results["in"]:
+            phrase = random.choice(["visiting", "taking on", "battling"])
+            out.append(f"- {l.replace('@', phrase)}")
+            
     if results["post"]:
         out.append("\n🟥 **Final Results:**")
         out.extend([f"- {l}" for l in results["post"]])
+
     if results["pre"]:
-        out.append("\n🟩 **Scheduled for Later:**")
+        out.append("\n🟩 **Coming Up Later:**")
         out.extend([f"- {l}" for l in results["pre"]])
+        
     return "\n".join(out)
 
 # ----------------------------------------------------
-# Schedules (Conversational Logic)
+# Schedules (Conversational & Narrative)
 # ----------------------------------------------------
 def get_next_game(team_name: str) -> str:
     meta = find_team(team_name)
@@ -235,7 +244,7 @@ def get_last_game(team_name: str) -> str:
     return f"In their last outing, here's how it finished: {' - '.join(scores)} ({to_et(parse_iso_datetime(past[0].get('date')))}). 🏟️"
 
 # ----------------------------------------------------
-# Players & Fantasy (Conversational Logic)
+# Players & Fantasy (Narrative Scouting Reports)
 # ----------------------------------------------------
 def _ensure_player_cache():
     global _PLAYER_CACHE, _PLAYER_CACHE_LAST
@@ -244,6 +253,33 @@ def _ensure_player_cache():
     if "__error" not in data:
         _PLAYER_CACHE = data
         _PLAYER_CACHE_LAST = time.time()
+
+def get_player_profile_smart(name: str) -> str:
+    _ensure_player_cache()
+    q = clean_query(name)
+    
+    target_p = None
+    for p in _PLAYER_CACHE.values():
+        if is_fuzzy_match(q, p.get("full_name", "")):
+            target_p = p
+            break
+            
+    if target_p:
+        full_name = target_p.get('full_name')
+        pos = target_p.get('position')
+        team = target_p.get('team', 'Free Agent')
+        exp = target_p.get('years_exp', 'N/A')
+        college = target_p.get('college', 'N/A')
+        
+        narrative = [
+            f"I've got the scouting report ready for **{full_name}**. ",
+            f"He's currently lining up as a {pos} for the {team}. ",
+            f"He played his college ball at {college} and now has {exp} years of NFL experience under his belt.",
+            "\n\nIs there anything specific about his stats or recent news you'd like to know?"
+        ]
+        return "".join(narrative)
+        
+    return f"I couldn't find a profile for '{name}'. Are they a rookie, or maybe I just need a different spelling?"
 
 def get_fantasy_player_stats(query_name: str) -> str:
     _ensure_player_cache()
@@ -259,16 +295,8 @@ def get_fantasy_player_stats(query_name: str) -> str:
             matches.append(f"{p.get('full_name')} ({p.get('position')}): **{pts} PPR Points**")
     
     if matches:
-        return f"I checked the fantasy stats—{matches[0]}! Hope they're in your starting lineup. 📈"
-    return f"I couldn't find any fantasy data for {query_name}. Are they on the IR or maybe a practice squad?"
-
-def get_player_profile_smart(name: str) -> str:
-    _ensure_player_cache()
-    q = clean_query(name)
-    for p in _PLAYER_CACHE.values():
-        if is_fuzzy_match(q, p.get("full_name", "")):
-            return f"**Here's the scouting report on {p.get('full_name')}:**\n- 🏈 **Team:** {p.get('team')}\n- 🏃 **Position:** {p.get('position')}\n- 🎓 **College:** {p.get('college')}\n- 🎖️ **Experience:** {p.get('years_exp')} years in the league."
-    return f"I couldn't find a profile for '{name}'. Are they a rookie I should know about?"
+        return f"I took a look at the latest fantasy data—{matches[0]}! If you've got them on your team, that's a solid production line. 📈"
+    return f"I'm not seeing any fantasy points recorded for {query_name} yet. They might be a deep sleeper!"
 
 # -------------------------
 # Standings & Odds
