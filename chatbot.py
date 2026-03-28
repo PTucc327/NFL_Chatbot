@@ -47,23 +47,28 @@ def extract_team_advanced(text: str) -> Optional[str]:
 def nfl_chatbot_with_context(user_input: str):
     import streamlit as st 
     
-    # 1. Retrieve memory
+    # 1. Get the previous subject from memory
     last_subject = st.session_state.get("last_mentioned")
     
-    # 2. Contextual Resolution (e.g., 'how are they doing?' -> 'Cowboys standings')
-    resolved_query = resolve_contextual_query(user_input, last_subject)
-    logger.info(f"Original: {user_input} | Resolved: {resolved_query}")
-    
-    # 3. Process Query
-    response = handle_user_query(resolved_query)
-    
-    # 4. Subject Update Guard
+    # 2. Check if the user is explicitly mentioning a NEW team or player in THIS prompt
+    # We use ORIGINAL input to see if user changed the topic
     new_entity = detect_team_from_query(user_input) or _normalize_player_query(user_input)
     
-    # Don't let generic action words become the 'subject'
-    forbidden_subjects = {"news", "stats", "scores", "standing", "fantasy", "odds", "game", "updates", "latest"}
-    if new_entity and new_entity.lower() not in forbidden_subjects:
+    # Guard: Prevent generic action words from becoming the subject
+    actions = ["last game", "next game", "fantasy", "stats", "news", "scores", "standing", "schedule"]
+    is_action_only = new_entity.lower() in actions if new_entity else False
+
+    # 3. Decision Logic:
+    # If the user mentioned a NEW team/player, IGNORE the old memory
+    if new_entity and not is_action_only:
+        resolved_query = user_input
         st.session_state["last_mentioned"] = new_entity
+    else:
+        # Only use context if no new subject was found
+        resolved_query = resolve_contextual_query(user_input, last_subject)
+    
+    # 4. Route to main processing
+    response = handle_user_query(resolved_query)
         
     return response
 

@@ -254,32 +254,53 @@ def _ensure_player_cache():
         _PLAYER_CACHE = data
         _PLAYER_CACHE_LAST = time.time()
 
-def get_player_profile_smart(name: str) -> str:
+def get_player_profile_smart(user_input: str) -> Any:
+    """
+    Handles ambiguous players by filtering by team or returning a selection object.
+    """
     _ensure_player_cache()
-    q = clean_query(name)
+    q = clean_query(user_input)
     
-    target_p = None
-    for p in _PLAYER_CACHE.values():
-        if is_fuzzy_match(q, p.get("full_name", "")):
-            target_p = p
-            break
-            
-    if target_p:
-        full_name = target_p.get('full_name')
-        pos = target_p.get('position')
-        team = target_p.get('team', 'Free Agent')
-        exp = target_p.get('years_exp', 'N/A')
-        college = target_p.get('college', 'N/A')
+    # 1. Detect if a team was mentioned in the natural language prompt
+    team_filter = detect_team_from_query(q)
+    
+    # 2. Extract name tokens (stripping filler words)
+    name_query = q.replace("who is", "").replace("tell me about", "").strip()
+    # If a team was found, remove that team name from the player name search
+    if team_filter:
+        name_query = name_query.replace(team_filter, "").strip()
         
-        narrative = [
-            f"I've got the scouting report ready for **{full_name}**. ",
-            f"He's currently lining up as a {pos} for the {team}. ",
-            f"He played his college ball at {college} and now has {exp} years of NFL experience under his belt.",
-            "\n\nIs there anything specific about his stats or recent news you'd like to know?"
-        ]
-        return "".join(narrative)
-        
-    return f"I couldn't find a profile for '{name}'. Are they a rookie, or maybe I just need a different spelling?"
+    matches = []
+    # _PLAYER_CACHE is a dict where keys are IDs and values are player info
+    for pid, p in _PLAYER_CACHE.items():
+        full_name = p.get("full_name", "").lower()
+        if is_fuzzy_match(name_query, full_name):
+            # 3. Apply team filter if user provided one
+            if team_filter:
+                p_team = (p.get("team") or "").lower()
+                if team_filter in p_team:
+                    matches.append(p)
+            else:
+                matches.append(p)
+
+    if not matches:
+        return f"I couldn't find a profile for '{user_input}'. Did I catch a typo?"
+
+    # 4. If multiple matches found and no team was specified, ask the user
+    if len(matches) > 1 and not team_filter:
+        return {
+            "type": "selection_required",
+            "matches": matches[:5]  # Top 5 matches
+        }
+
+    # 5. Narrative Response for a single/filtered match
+    p = matches[0]
+    return (
+        f"I've got the scouting report for **{p['full_name']}**. "
+        f"He's currently a {p['position']} for the {p.get('team', 'FA')}. "
+        f"He's a {p.get('years_exp', 'N/A')}-year veteran out of {p.get('college', 'N/A')}."
+    )
+
 
 def get_fantasy_player_stats(query_name: str) -> str:
     _ensure_player_cache()
@@ -320,15 +341,33 @@ def get_game_odds(team_name: str) -> str:
 # -------------------------
 # Orchestration Helpers
 # -------------------------
-def resolve_contextual_query(q: str, last: Optional[str]) -> str:
-    if last and (len(q.split()) < 3 or any(p in q.lower() for p in ["he", "his", "him", "they", "them"])):
-        return f"{last} {q}"
-    return q
+def resolve_contextual_query(user_input: str, last_subject: Optional[str]) -> str:
+    ui = user_input.lower().strip()
+    
+    # List of triggers that definitely need context
+    vague_intents = ["stats", "fantasy", "news", "record", "next game", "last game", "how did they do"]
+    has_pronoun = any(p in ui for p in ["he ", "him ", "his ", "them ", "they "])
+    is_vague = any(intent == ui for intent in vague_intents)
 
-def detect_team_from_query(q: str) -> Optional[str]:
+    if (is_vague or has_pronoun) and last_subject:
+        return f"{last_subject} {ui}"
+            
+    return user_input
+
+def detect_team_from_query(query: str, debug=False) -> Optional[str]:
+    # Ensure cache is ready
     ensure_team_cache()
-    for k in _TEAM_CACHE.keys():
-        if k in q.lower(): return k
+    q = query.lower().strip()
+    
+    # Sort cache keys by length (longest first) so 'New York Giants' matches before 'Giants'
+    sorted_keys = sorted(_TEAM_CACHE.keys(), key=len, reverse=True)
+    
+    for k in sorted_keys:
+        # Use regex word boundaries (\b) so 'Ne' doesn't match 'New England'
+        if re.search(rf"\b{re.escape(k)}\b", q):
+            if debug: print(f"Detected team: {k}")
+            return _TEAM_CACHE[k]["displayName"]
+            
     return None
 
 def _normalize_player_query(q: str) -> str:
