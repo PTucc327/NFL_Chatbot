@@ -1,11 +1,12 @@
 """
-NFL Chatbot Router (Professional Conversational Version)
-Handles intent recognition, entity extraction, and stateful orchestration.
+NFL Chatbot Router (Professional Orchestration Version)
+Handles intent recognition, entity extraction, and stateful memory.
 """
 
 import re
 import logging
 from typing import Optional
+import streamlit as st
 from src.utils import clean_query
 from src.api_client import (
     get_live_scores,
@@ -16,19 +17,18 @@ from src.api_client import (
     get_player_profile_smart,
     get_fantasy_player_stats,
     get_game_odds,
-    find_team,
-    resolve_contextual_query,
     detect_team_from_query,
+    resolve_contextual_query,
     _normalize_player_query
 )
 
 logger = logging.getLogger(__name__)
 
 # -------------------------------------
-# Intent & Entity Logic
+# Intent Mapping (NLU Layer)
 # -------------------------------------
 
-# Professional Intent Patterns for Natural Language Understanding (NLU)
+# These patterns allow the bot to understand "human" phrasing
 INTENT_MAP = {
     "scores": r"\b(score|how did|results|win|lose|playing|do today|beat)\b",
     "news": r"\b(news|latest|buzz|updates|happening|word|rumor|headlines)\b",
@@ -38,9 +38,13 @@ INTENT_MAP = {
     "fantasy": r"\b(fantasy|ppr|points|bench|start)\b"
 }
 
+# -------------------------------------
+# Helper Logic
+# -------------------------------------
+
 def extract_team_advanced(text: str) -> Optional[str]:
     """
-    Scans query for known team names/abbreviations using prioritized cache matching.
+    Scans query for known team names or abbreviations.
     """
     detected = detect_team_from_query(text)
     if detected:
@@ -51,74 +55,80 @@ def extract_team_advanced(text: str) -> Optional[str]:
     return words[-1] if words else None
 
 # -------------------------------------
-# Main Orchestration
+# Main Orchestration ("The Brain")
 # -------------------------------------
 
 def nfl_chatbot_with_context(user_input: str):
     """
-    Decides whether to use conversational memory or switch focus to a new subject.
+    The main entry point. Decides whether to use memory or switch subjects.
     """
-    import streamlit as st 
-    
-    # 1. Get the previous subject from memory
+    # 1. Subject Priority: Does the user mention a NEW team or player?
+    # This prevents 'Sticky Subject' syndrome (e.g., switching from Patriots to Giants)
+    new_entity = detect_team_from_query(user_input) or _normalize_player_query(user_input)
     last_subject = st.session_state.get("last_mentioned")
     
-    # 2. Identify if a NEW entity is mentioned in this specific turn
-    new_entity = detect_team_from_query(user_input) or _normalize_player_query(user_input)
-    
-    # Check if the detected 'entity' is actually just a common action word
+    # Guard: Don't treat common action words as new subjects
     actions = ["last game", "next game", "fantasy", "stats", "news", "scores", "standing", "schedule"]
     is_action_only = new_entity.lower() in actions if new_entity else False
 
-    # 3. Decision Logic: Priority goes to NEW entities to prevent "Sticky Subject" syndrome
+    # 2. Memory Routing Logic
     if new_entity and not is_action_only:
+        # Topic Switch detected
         resolved_query = user_input
-        st.session_state["last_mentioned"] = new_entity
-        logger.info(f"Subject Switch: {new_entity}")
+        logger.info(f"Subject Switch detected: {new_entity}")
     else:
-        # Use context if the query is vague (e.g., "how did they do?")
+        # Vague/Follow-up query (e.g., 'How did they do?') -> Apply memory
         resolved_query = resolve_contextual_query(user_input, last_subject)
     
-    # 4. Route to the specialized handlers
+    # 3. Process the query through the Intent Router
     response = handle_user_query(resolved_query)
+    
+    # 4. State Management: Only "lock in" the new subject if the search was successful
+    # We don't update memory if the result was a 'selection_required' dictionary
+    if isinstance(response, str) and new_entity and not is_action_only:
+        st.session_state["last_mentioned"] = new_entity
         
     return response
 
 def handle_user_query(q: str):
     """
-    Routes conversational prompts to specific API data functions.
+    Maps conversational intent to specific data functions.
+    Handles both Narrative Strings and Selection Dictionaries.
     """
     q_low = q.lower().strip()
 
-    # Intent: Scores & Results
+    # --- Intent: Player Scouting & Disambiguation ---
+    # This block handles "Who is Josh Allen" or "Josh Allen on the Bills"
+    if re.search(INTENT_MAP["scouting"], q_low) or len(q_low.split()) <= 2:
+        # Strip conversational filler to isolate the name/team/position
+        clean_name = q_low.replace("who is", "").replace("tell me about", "").replace("on the", "").strip()
+        
+        # Returns a Narrative String OR a dict for Selection Buttons
+        return get_player_profile_smart(clean_name)
+
+    # --- Intent: Scores & Live Results ---
     if re.search(INTENT_MAP["scores"], q_low):
         team = extract_team_advanced(q_low)
-        # If no specific team is resolved, provide the general scoreboard
         return get_live_scores(team if team not in ["score", "results"] else None)
 
-    # Intent: News & Rumors
+    # --- Intent: Team News & Buzz ---
     if re.search(INTENT_MAP["news"], q_low):
         team = extract_team_advanced(q_low)
         return get_team_news(team or "NFL")
 
-    # Intent: Schedule & Future Games
+    # --- Intent: Schedule & Matchups ---
     if re.search(INTENT_MAP["schedule"], q_low):
         team = extract_team_advanced(q_low)
         return get_next_game(team)
 
-    # Intent: Betting & Odds
+    # --- Intent: Betting & Odds ---
     if re.search(INTENT_MAP["betting"], q_low):
         team = extract_team_advanced(q_low)
         return get_game_odds(team)
 
-    # Intent: Fantasy & Points
+    # --- Intent: Fantasy Performance ---
     if re.search(INTENT_MAP["fantasy"], q_low):
         return get_fantasy_player_stats(q_low)
 
-    # Intent: Player Scouting (Catch-all for names and "Tell me about...")
-    if re.search(INTENT_MAP["scouting"], q_low) or len(q_low.split()) <= 2:
-        # Strip conversational filler to isolate the name for the fuzzy matcher
-        clean_name = q_low.replace("who is", "").replace("tell me about", "").replace("on the", "").strip()
-        return get_player_profile_smart(clean_name)
-
+    # Fallback response for unhandled queries
     return "I'm not exactly sure what you're looking for, but I'm happy to check on scores, news, or player stats! 🏈"
