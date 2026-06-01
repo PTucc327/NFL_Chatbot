@@ -43,15 +43,14 @@ Aggregates news from **ESPN**, **DuckDuckGo**, and **RSS feeds** with a custom r
 
 1. **Clone the repository:**
    ```bash
-    git clone [https://github.com/PTucc327/NFL_Chatbot.git](https://github.com/PTucc327/NFL_Chatbot.git)
-    cd NFL_Chatbot
+   git clone https://github.com/PTucc327/NFL_Chatbot.git
+   cd NFL_Chatbot
    ```
 
-2. **install dependencies**
-    ```bash
-        pip install requirements.txt
-
-    ```
+2. **Install dependencies**
+   ```bash
+   pip install -r requirements.txt
+   ```
 
 3. **Run the program**
     ```python

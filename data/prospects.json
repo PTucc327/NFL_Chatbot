@@ -1,0 +1,51 @@
+[
+  {
+    "name": "Arch Manning",
+    "school": "Texas",
+    "pos": "QB",
+    "stats": "2025: 3,163 Yds, 26 TD, 10 Rush TD",
+    "outlook": "Top 2026/2027 NFL Draft Prospect"
+  },
+  {
+    "name": "Travis Hunter",
+    "school": "Colorado",
+    "pos": "WR/CB",
+    "stats": "92 Rec, 1,152 Yds, 14 TD | 4 INT, 31 Tackles",
+    "awards": "2024 Heisman Winner, Paul Hornung Award"
+  },
+  {
+    "name": "Shedeur Sanders",
+    "school": "Colorado",
+    "pos": "QB",
+    "stats": "2024: 4,134 Yds, 37 TD, 10 INT, 74.0% Completion",
+    "outlook": "2025 NFL Draft — Top QB Prospect"
+  },
+  {
+    "name": "Cam Ward",
+    "school": "Miami (FL)",
+    "pos": "QB",
+    "stats": "2024: 4,313 Yds, 39 TD, 7 INT",
+    "outlook": "2025 NFL Draft — Projected Top-5 Pick"
+  },
+  {
+    "name": "Abdul Carter",
+    "school": "Penn State",
+    "pos": "EDGE",
+    "stats": "2024: 12 Sacks, 16.5 TFL, 55 Tackles",
+    "outlook": "2025 NFL Draft — Top Edge Prospect"
+  },
+  {
+    "name": "Will Johnson",
+    "school": "Michigan",
+    "pos": "CB",
+    "stats": "2024: 4 INTs, 14 PBUs, 40 Tackles",
+    "outlook": "2025 NFL Draft — Top CB Prospect"
+  },
+  {
+    "name": "Mason Graham",
+    "school": "Michigan",
+    "pos": "DT",
+    "stats": "2024: 6.5 Sacks, 12 TFL, 44 Tackles",
+    "outlook": "2025 NFL Draft — Top Interior DL Prospect"
+  }
+]

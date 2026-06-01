@@ -25,6 +25,8 @@ def is_fuzzy_match(target: str, candidate: str, threshold: int = 85) -> bool:
     """
     Uses token_set_ratio for high-accuracy matching.
     Handles typos, word order, and middle initials common in NFL names.
+    Requires at least 2 tokens in the query to prevent a bare first name
+    (e.g., 'josh') from matching every player with that first name.
     """
     if not target or not candidate:
         return False
@@ -35,8 +37,14 @@ def is_fuzzy_match(target: str, candidate: str, threshold: int = 85) -> bool:
     # 1. Quick bypass for exact matches
     if t_low == c_low:
         return True
+
+    # 2. Single-token guard: a bare first name like "josh" would score 100
+    #    against every "Josh X" via token_set_ratio. Require at least 2 tokens
+    #    so the caller is forced to provide enough context for disambiguation.
+    if len(t_low.split()) < 2:
+        return False
         
-    # 2. Token Set Ratio is best for "Josh Allen" vs "Josh R. Allen"
+    # 3. Token Set Ratio is best for "Josh Allen" vs "Josh R. Allen"
     score = fuzz.token_set_ratio(t_low, c_low)
     return score >= threshold
 

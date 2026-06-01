@@ -1,6 +1,7 @@
-streamlit
-pandas
-requests
-feedparser
-rapidfuzz
-python-dotenv
+streamlit==1.54.0
+pandas==2.3.3
+requests==2.32.5
+feedparser==6.0.12
+rapidfuzz==3.14.3
+python-dotenv==1.2.1
+google-genai==2.7.0

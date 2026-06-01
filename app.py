@@ -3,9 +3,14 @@ NFL Chatbot UI (Professional Conversational Version)
 Built with Streamlit to simulate a "thinking" AI assistant.
 """
 
+import os
 import streamlit as st
+from dotenv import load_dotenv
 from src.chatbot import nfl_chatbot_with_context
 from src.api_client import ensure_team_cache, _TEAM_CACHE
+
+# Load environment variables from .env if present
+load_dotenv()
 
 # 1. Professional Page Configuration
 st.set_page_config(
@@ -87,33 +92,47 @@ if final_query:
             st.write("Searching NFL databases...")
             response = nfl_chatbot_with_context(final_query)
             status.update(label="Analysis Complete!", state="complete")
-        
+
+        # --- Handle missing API key ---
+        if isinstance(response, str) and response.startswith("__CONFIG_ERROR__"):
+            error_msg = (
+                "⚠️ **Gemini API key not configured.**\n\n"
+                "To enable the AI assistant:\n"
+                "1. Get a free key at [Google AI Studio](https://aistudio.google.com/app/apikey)\n"
+                "2. Copy `template.env` to `.env` and add your key\n"
+                "3. Restart the app"
+            )
+            st.error(error_msg)
+            st.session_state.messages.append({"role": "assistant", "content": error_msg})
+
         # --- Handle Disambiguation Buttons ---
-        if isinstance(response, dict) and response.get("type") == "selection_required":
-            # Safety: Get matches or default to empty list to prevent KeyError
+        elif isinstance(response, dict) and response.get("type") == "selection_required":
             player_list = response.get("matches", [])
-            
+
             if player_list:
-                st.write(response.get("message", "I found a few players with that name. Who did you mean?"))
-                
-                # Using columns for a professional button layout
+                disambiguation_msg = response.get("message", "I found a few players with that name. Who did you mean?")
+                st.write(disambiguation_msg)
+                # Save to history so it appears correctly on re-render
+                st.session_state.messages.append({"role": "assistant", "content": disambiguation_msg})
+
                 cols = st.columns(len(player_list))
                 for idx, p in enumerate(player_list):
-                    # Use player_id (Sleeper format) or id as fallback
                     p_id = p.get("player_id") or p.get("id")
                     btn_label = f"**{p['full_name']}**\n({p.get('team', 'FA')} - {p['position']})"
-                    
+
                     if cols[idx].button(btn_label, key=f"sel_{p_id}"):
-                        # Update subject and inject hidden prompt to trigger specific fetch
                         st.session_state["last_mentioned"] = p['full_name']
                         st.session_state.messages.append({
-                            "role": "user", 
+                            "role": "user",
                             "content": f"Show me the profile for {p['full_name']} on the {p.get('team')}"
                         })
                         st.rerun()
             else:
-                st.warning("I found multiple matches but had trouble loading the details. Try adding the team name to your search!")
+                fallback_msg = "I found multiple matches but had trouble loading the details. Try adding the team name to your search!"
+                st.warning(fallback_msg)
+                st.session_state.messages.append({"role": "assistant", "content": fallback_msg})
+
+        # --- Standard conversational response ---
         else:
-            # Standard conversational response
             st.markdown(response)
             st.session_state.messages.append({"role": "assistant", "content": response})

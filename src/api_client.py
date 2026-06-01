@@ -5,6 +5,8 @@ This file acts as a Pure Data Provider to be orchestrated by the chatbot router.
 """
 
 import datetime
+import json
+import os
 import random
 import re
 import requests
@@ -13,7 +15,10 @@ import pandas as pd
 import time
 import logging
 import concurrent.futures
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List, Tuple, Union
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Professional logging setup
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -43,6 +48,16 @@ ENDPOINTS = {
     "sleeper_stats": "https://api.sleeper.app/v1/stats/nfl/regular/{year}"
 }
 
+def _current_nfl_season_year() -> int:
+    """
+    Returns the correct Sleeper stats year to query.
+    The NFL season runs Sep–Feb, so Jan–Aug of a calendar year still belongs
+    to the previous season (e.g., May 2026 -> 2025 season stats).
+    """
+    now = datetime.datetime.now()
+    # NFL season data is available from September onward
+    return now.year if now.month >= 9 else now.year - 1
+
 # Mapping for nicknames to ensure robust entity recognition
 NICKNAMES = {
     "pats": "patriots", "fins": "dolphins", "philly": "eagles", "g-men": "giants",
@@ -51,6 +66,33 @@ NICKNAMES = {
 }
 
 POSITIONS = {"QB","RB","WR","TE","K","P","DE","DT","LB","CB","S","OL","G","T","C"}
+
+# -------------------------
+# Static Data Loaders
+# -------------------------
+
+_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+
+def _load_static_data(filename: str) -> List[Dict[str, Any]]:
+    """Loads a JSON data file from the project's data/ directory."""
+    path = os.path.join(_DATA_DIR, filename)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        logger.error(f"Static data file not found: {path}")
+        return []
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse {filename}: {e}")
+        return []
+
+def _build_lookup(records: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """Builds a lowercase name-keyed lookup dict from a list of records."""
+    return {r["name"].lower(): r for r in records}
+
+# Load once at module import time; reload by calling these again if needed
+_LEGENDS: Dict[str, Dict[str, Any]] = _build_lookup(_load_static_data("legends.json"))
+_PROSPECTS: Dict[str, Dict[str, Any]] = _build_lookup(_load_static_data("prospects.json"))
 
 # -------------------------
 # Local Caches
@@ -249,35 +291,42 @@ def get_standings(team_query: Optional[str] = None) -> str:
         return "I'm having a bit of trouble pulling the latest standings. Check back in a bit! ⚠️"
 
     team_meta = find_team(team_query) if team_query else None
-    standings_groups = data.get("children", [])
+    # ESPN standings API returns conferences directly under 'children';
+    # each conference has its own 'standings.entries' (no division sub-children)
+    conferences = data.get("children", [])
     output = ["📊 **NFL Standings Update:**\n"]
     found_team_info = None
 
-    for conference in standings_groups:
-        for division in conference.get("children", []):
-            div_name = division.get("name", "")
-            div_lines = [f"**{div_name}**"]
-            for entry in division.get("standings", {}).get("entries", []):
-                t_name = entry.get("team", {}).get("displayName")
-                stats = {s['name']: s['displayValue'] for s in entry.get("stats", [])}
-                record = stats.get("wins", "0") + "-" + stats.get("losses", "0")
-                if stats.get("ties") != "0": record += f"-{stats.get('ties')}"
-                
-                line = f"- {t_name}: **{record}**"
-                div_lines.append(line)
+    for conference in conferences:
+        conf_name = conference.get("name", "")
+        entries = conference.get("standings", {}).get("entries", [])
+        if not entries:
+            continue
 
-                if team_meta and team_meta["displayName"].lower() in t_name.lower():
-                    found_team_info = (div_name, div_lines)
+        conf_lines = [f"**{conf_name}**"]
+        for entry in entries:
+            t_name = entry.get("team", {}).get("displayName", "Unknown")
+            stats = {s["name"]: s["displayValue"] for s in entry.get("stats", [])}
+            wins   = stats.get("wins", "0")
+            losses = stats.get("losses", "0")
+            ties   = stats.get("ties", "0")
+            record = f"{wins}-{losses}" + (f"-{ties}" if ties != "0" else "")
 
-            if not team_query:
-                output.extend(div_lines)
-                output.append("")
+            line = f"- {t_name}: **{record}**"
+            conf_lines.append(line)
+
+            if team_meta and team_meta["displayName"].lower() in t_name.lower():
+                found_team_info = (conf_name, conf_lines[:])
+
+        if not team_query:
+            output.extend(conf_lines)
+            output.append("")
 
     if team_query:
         if found_team_info:
-            div_name, lines = found_team_info
-            return f"The {team_meta['displayName']} are currently battling in the {div_name}:\n" + "\n".join(lines)
-        return f"I couldn't find the standings for the '{team_query}'."
+            conf_name, lines = found_team_info
+            return f"The {team_meta['displayName']} are currently in the {conf_name}:\n" + "\n".join(lines)
+        return f"I couldn't find the standings for '{team_query}'."
 
     return "\n".join(output)
 
@@ -292,9 +341,13 @@ def get_next_game(team_name: str) -> str:
     data = fetch_json(meta["schedule_url"])
     events = data.get("events", [])
     now = datetime.datetime.now(datetime.timezone.utc)
-    
-    future = sorted([e for e in events if parse_iso_datetime(e.get("date")) > now], 
-                    key=lambda x: parse_iso_datetime(x.get("date")))
+
+    # Guard: skip events where date fails to parse (returns None)
+    future = sorted(
+        [e for e in events if parse_iso_datetime(e.get("date")) is not None
+         and parse_iso_datetime(e.get("date")) > now],
+        key=lambda x: parse_iso_datetime(x.get("date"))
+    )
     if not future: return f"It looks like the {meta['displayName']} don't have any games lined up right now."
     
     ev = future[0]
@@ -318,9 +371,14 @@ def get_last_game(team_name: str) -> str:
     data = fetch_json(meta["schedule_url"])
     events = data.get("events", [])
     now = datetime.datetime.now(datetime.timezone.utc)
-    
-    past = sorted([e for e in events if parse_iso_datetime(e.get("date")) <= now], 
-                  key=lambda x: parse_iso_datetime(x.get("date")), reverse=True)
+
+    # Guard: skip events where date fails to parse (returns None)
+    past = sorted(
+        [e for e in events if parse_iso_datetime(e.get("date")) is not None
+         and parse_iso_datetime(e.get("date")) <= now],
+        key=lambda x: parse_iso_datetime(x.get("date")),
+        reverse=True
+    )
     if not past: return f"I can't seem to find the last score for the {meta['displayName']}."
     
     comp = past[0].get("competitions", [{}])[0]
@@ -337,30 +395,16 @@ def _ensure_player_cache():
         _PLAYER_CACHE_LAST = time.time()
 
 
-def get_player_profile_smart(user_input: str) -> Any:
+def get_player_profile_smart(user_input: str) -> Union[str, Dict[str, Any]]:
     _ensure_player_cache()
     q = user_input.lower().strip()
 
     # ---------------------------------------------------------
     # LAYER 1: Retired Legends (History & Awards)
+    # Loaded from data/legends.json — add entries there to expand coverage
     # ---------------------------------------------------------
-    LEGENDS = {
-        "tom brady": {
-            "name": "Tom Brady", "pos": "QB", "status": "Retired (HOF 2028)",
-            "teams": "Patriots, Buccaneers",
-            "stats": "89,214 Yds, 649 TDs (NFL Records)",
-            "awards": "7x SB Champ, 3x MVP, 5x SB MVP, 15x Pro Bowl"
-        },
-        "eli manning": {
-            "name": "Eli Manning", "pos": "QB", "status": "Retired",
-            "teams": "NY Giants (2004-2019)",
-            "stats": "57,023 Yds, 366 TDs",
-            "awards": "2x SB MVP, 4x Pro Bowl, Walter Payton Man of the Year"
-        }
-    }
-
-    if q in LEGENDS:
-        l = LEGENDS[q]
+    if q in _LEGENDS:
+        l = _LEGENDS[q]
         return (f"### 🏛️ Legend: {l['name']}\n"
                 f"- **Status:** {l['status']}\n"
                 f"- **Teams:** {l['teams']}\n"
@@ -369,26 +413,14 @@ def get_player_profile_smart(user_input: str) -> Any:
 
     # ---------------------------------------------------------
     # LAYER 2: College Prospects (Stats & Draft)
+    # Loaded from data/prospects.json — add entries there to expand coverage
     # ---------------------------------------------------------
-    PROSPECTS = {
-        "arch manning": {
-            "name": "Arch Manning", "school": "Texas", "pos": "QB",
-            "stats": "2025: 3,163 Yds, 26 TD, 10 Rush TD",
-            "outlook": "Top 2026/2027 NFL Draft Prospect"
-        },
-        "travis hunter": {
-            "name": "Travis Hunter", "school": "Colorado", "pos": "WR/CB",
-            "stats": "92 Rec, 1,152 Yds, 14 TD | 4 INT, 31 Tackles",
-            "awards": "2024 Heisman Winner, Paul Hornung Award"
-        }
-    }
-
-    if q in PROSPECTS:
-        p = PROSPECTS[q]
+    if q in _PROSPECTS:
+        p = _PROSPECTS[q]
         return (f"### 🎓 Prospect: {p['name']}\n"
                 f"- **School:** {p['school']} | **Pos:** {p['pos']}\n"
                 f"- **2024/25 Stats:** {p['stats']}\n"
-                f"- **Draft/Awards:** {p['awards'] if 'awards' in p else p['outlook']}")
+                f"- **Draft/Awards:** {p.get('awards', p.get('outlook', 'N/A'))}")
 
     # ---------------------------------------------------------
     # LAYER 3: Active Players (Sleeper Data + Live Stats)
@@ -409,9 +441,9 @@ def get_player_profile_smart(user_input: str) -> Any:
     return f"I couldn't find a record for '{q.title()}'. They might be a deep-history legend!"
 
 def get_fantasy_player_stats(query_name: str) -> str:
-    """Retrieves PPR fantasy points for a player."""
+    """Retrieves PPR fantasy points for a player using the correct NFL season year."""
     _ensure_player_cache()
-    year = datetime.datetime.now().year
+    year = _current_nfl_season_year()
     stats = fetch_json(ENDPOINTS["sleeper_stats"].format(year=year))
     q = clean_query(query_name)
     
