@@ -106,7 +106,7 @@ def parse_iso_datetime(dt_str: Optional[str]) -> Optional[datetime.datetime]:
     return None
 
 def to_et(dt: Optional[datetime.datetime]) -> str:
-    """Converts UTC to Eastern Time with robust timezone handling."""
+    """Converts UTC to Eastern Time and returns a human-readable date+time string."""
     if not dt:
         return "TBD"
     
@@ -115,16 +115,20 @@ def to_et(dt: Optional[datetime.datetime]) -> str:
         dt = dt.replace(tzinfo=datetime.timezone.utc)
         
     try:
-        # Attempt to use modern ZoneInfo (Python 3.9+)
         from zoneinfo import ZoneInfo
         et_tz = ZoneInfo("America/New_York")
     except ImportError:
-        # Fallback for older environments
         from datetime import timezone, timedelta
-        et_tz = timezone(timedelta(hours=-5)) # Approximation of ET
+        et_tz = timezone(timedelta(hours=-5))
 
     et_dt = dt.astimezone(et_tz)
-    return et_dt.strftime("%I:%M %p ET")
+
+    # Include date when the game is not today
+    today_et = datetime.datetime.now(et_dt.tzinfo).date()
+    if et_dt.date() == today_et:
+        return et_dt.strftime("%I:%M %p ET")          # Today — time only
+    else:
+        return et_dt.strftime("%a %b %#d, %I:%M %p ET")  # Other day — full date+time
 
 # -------------------------------------------------------------------
 # Data Cleansing
