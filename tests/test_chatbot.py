@@ -38,7 +38,9 @@ sys.modules["src.utils"] = mock.MagicMock()
 
 sys.path.insert(0, ".")
 import importlib.util as _ilu
-_spec = _ilu.spec_from_file_location("src.chatbot", "NFL_Chatbot/src/chatbot.py")
+import os as _os
+_chatbot_path = _os.path.join(_os.path.dirname(__file__), "..", "src", "chatbot.py")
+_spec = _ilu.spec_from_file_location("src.chatbot", _chatbot_path)
 chatbot = _ilu.module_from_spec(_spec)
 sys.modules["src.chatbot"] = chatbot
 _spec.loader.exec_module(chatbot)

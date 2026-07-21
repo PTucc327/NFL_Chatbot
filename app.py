@@ -9,15 +9,16 @@ Streamlit chrome.
 
 import os
 import re
+import json
 import time
 import random
 import datetime
 import itertools
 import streamlit as st
 from dotenv import load_dotenv
+from streamlit_mic_recorder import speech_to_text
 
 from src.chatbot import nfl_chatbot_with_context
-from src.api_client import ensure_team_cache, _TEAM_CACHE
 
 load_dotenv()
 
@@ -101,6 +102,17 @@ st.markdown("""
         color: #ffffff;
         background: #1c2b3f;
     }
+    div.stButton > button[kind="primary"] {
+        background: linear-gradient(120deg, #2f6fed 0%, #1f4fc4 100%);
+        border: none;
+        color: #ffffff;
+        font-weight: 600;
+        padding: 9px 12px;
+    }
+    div.stButton > button[kind="primary"]:hover {
+        background: linear-gradient(120deg, #3f7bfa 0%, #2a5cd6 100%);
+        color: #ffffff;
+    }
 
     .player-card {
         border: 1px solid #26374d;
@@ -161,16 +173,25 @@ EXAMPLE_PROMPTS = [
 ]
 
 # ------------------------------------------------------------------
-# Team Cache + Logo Helper
+# Team Reference Data — loaded from a bundled static file, not a live
+# ESPN request. Team names/abbreviations/IDs don't change mid-season,
+# and the live /teams endpoint returns a huge payload (16 logo variants
+# + 6 links per team x 32 teams) that app.py never actually used — the
+# logo URL is built from a hardcoded CDN pattern regardless. This makes
+# the sidebar team list load instantly with zero network dependency.
 # ------------------------------------------------------------------
-ensure_team_cache()
-TEAM_NAMES = sorted({
-    meta.get("displayName") for meta in _TEAM_CACHE.values()
-    if meta.get("displayName")
-})
+@st.cache_data(show_spinner=False)
+def _load_team_data() -> dict:
+    path = os.path.join(os.path.dirname(__file__), "data", "teams.json")
+    with open(path, "r") as f:
+        teams = json.load(f)
+    return {t["displayName"]: t for t in teams}
+
+_TEAM_LOOKUP = _load_team_data()
+TEAM_NAMES = sorted(_TEAM_LOOKUP.keys())
 
 def team_logo_url(display_name: str) -> str:
-    meta = _TEAM_CACHE.get((display_name or "").lower())
+    meta = _TEAM_LOOKUP.get(display_name or "")
     abbr = (meta or {}).get("abbr", "")
     return f"https://a.espncdn.com/i/teamlogos/nfl/500/{abbr}.png" if abbr else ""
 
@@ -193,6 +214,17 @@ with st.sidebar:
         st.image(logo, width=64)
 
     sidebar_prompt = None
+
+    # Hero action — a reason to open the app even with no question in mind.
+    # Reuses the existing multi-intent pipeline (last_game + schedule + news +
+    # standings all in one Gemini extraction pass) rather than new backend code.
+    if st.button("📋 Daily Briefing", use_container_width=True, type="primary"):
+        sidebar_prompt = (
+            f"Give me a quick daily briefing for the {team_choice}: how they did "
+            f"in their last game, when their next game is, the latest news, and "
+            f"where they stand in the division."
+        )
+
     c1, c2 = st.columns(2)
     if c1.button("📊 Standings", use_container_width=True):
         sidebar_prompt = f"How are the {team_choice} looking in the standings?"
@@ -213,6 +245,31 @@ with st.sidebar:
                             placeholder="Player name, e.g. CeeDee Lamb")
     if st.button("💰 Fantasy Breakdown", use_container_width=True) and p_name:
         sidebar_prompt = f"Can you give me a fantasy breakdown for {p_name}?"
+    if st.button("🏥 Injury Report", use_container_width=True) and p_name:
+        sidebar_prompt = f"What is the injury status for {p_name}?"
+
+    st.divider()
+    st.caption("COMPARE & TRADE")
+    p1 = st.text_input("Player 1", label_visibility="collapsed",
+                        placeholder="Player 1", key="cmp_p1")
+    p2 = st.text_input("Player 2", label_visibility="collapsed",
+                        placeholder="Player 2", key="cmp_p2")
+    cc1, cc2 = st.columns(2)
+    if cc1.button("⚔️ Compare", use_container_width=True) and p1 and p2:
+        sidebar_prompt = f"Compare {p1} vs {p2}"
+    if cc2.button("🔄 Trade", use_container_width=True) and p1 and p2:
+        sidebar_prompt = f"Should I trade {p1} for {p2}?"
+
+    st.divider()
+    st.caption("WAIVER WIRE")
+    waiver_pos = st.selectbox("Position", ["Any", "QB", "RB", "WR", "TE"],
+                               label_visibility="collapsed", key="waiver_pos")
+    if st.button("🏆 Waiver Targets", use_container_width=True):
+        sidebar_prompt = (
+            "Who are the best waiver wire pickups right now?"
+            if waiver_pos == "Any"
+            else f"Who are the best {waiver_pos} waiver wire pickups right now?"
+        )
 
     st.divider()
     if st.button("🗑️ Clear Conversation", use_container_width=True):
@@ -263,10 +320,28 @@ for message in st.session_state.messages:
             st.markdown(f'<div class="msg-time">{ts}</div>', unsafe_allow_html=True)
 
 # ------------------------------------------------------------------
-# Input Handling
+# Input Handling — text or voice
 # ------------------------------------------------------------------
+# ------------------------------------------------------------------
+# Input Handling — text or voice
+# ------------------------------------------------------------------
+# st.chat_input only auto-docks to the bottom of the viewport when it's
+# called directly at the root of the script — nesting it inside
+# st.columns() (as the mic button previously did) silently breaks that
+# pinning, so it stops tracking the bottom as the transcript grows.
+# The mic control now sits on its own row above it instead.
+voice_input = speech_to_text(
+    language="en",
+    start_prompt="🎙️ Tap to speak",
+    stop_prompt="⏹️ Stop recording",
+    just_once=True,           # auto-clears after one recording, so it
+                               # won't keep resubmitting on reruns
+    use_container_width=True,
+    key="voice_input",
+)
 user_input = st.chat_input("Ex: 'How did the Giants do today?' or 'Tell me about Josh Allen'")
-final_query = sidebar_prompt or example_prompt or user_input
+
+final_query = sidebar_prompt or example_prompt or voice_input or user_input
 
 if final_query:
     now = datetime.datetime.now().strftime("%I:%M %p")

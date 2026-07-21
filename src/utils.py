@@ -14,8 +14,10 @@ from rapidfuzz import fuzz
 logger = logging.getLogger(__name__)
 
 # Constants
-REQUEST_TIMEOUT = 10
-MAX_RETRIES = 3
+REQUEST_TIMEOUT = 6    # was 10 — with 3 retries + backoff, 10s meant a worst
+                       # case of ~33s fully blocking the app's first render
+MAX_RETRIES = 2        # was 3 — still retries once on a hiccup, but caps
+                       # the worst case at ~13s (6 + 1s backoff + 6) instead
 
 # -------------------------------------------------------------------
 # Professional Fuzzy Matching
@@ -128,7 +130,10 @@ def to_et(dt: Optional[datetime.datetime]) -> str:
     if et_dt.date() == today_et:
         return et_dt.strftime("%I:%M %p ET")          # Today — time only
     else:
-        return et_dt.strftime("%a %b %#d, %I:%M %p ET")  # Other day — full date+time
+        # %#d (Windows) / %-d (POSIX) are platform-specific strftime flags;
+        # neither works everywhere, so strip the leading zero manually.
+        day = str(et_dt.day)
+        return et_dt.strftime(f"%a %b {day}, %I:%M %p ET")  # Other day — full date+time
 
 # -------------------------------------------------------------------
 # Data Cleansing

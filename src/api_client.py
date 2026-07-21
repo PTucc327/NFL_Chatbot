@@ -13,6 +13,7 @@ import requests
 import feedparser
 import time
 import logging
+import threading
 import concurrent.futures
 from typing import Optional, Dict, Any, List, Union
 from dotenv import load_dotenv
@@ -101,6 +102,15 @@ _TEAM_CACHE_LAST = 0
 _PLAYER_CACHE: Dict[str, Dict[str, Any]] = {}
 _PLAYER_CACHE_LAST = 0
 
+# _dispatch() now fans intents out across a ThreadPoolExecutor, so multiple
+# threads can call ensure_team_cache()/_ensure_player_cache() at the same
+# instant. Without a lock, each thread sees an empty/stale cache and fires
+# its own redundant fetch (wasted requests + a brief window of duplicate
+# network calls). These locks make cache population "first one in wins,
+# everyone else waits and reuses the result" instead of racing.
+_TEAM_CACHE_LOCK = threading.Lock()
+_PLAYER_CACHE_LOCK = threading.Lock()
+
 # -------------------------
 # Team Cache Management
 # -------------------------
@@ -111,35 +121,42 @@ def ensure_team_cache():
     now = time.time()
     if _TEAM_CACHE and now - _TEAM_CACHE_LAST < CACHE_TTL:
         return
-    
-    data = fetch_json(ENDPOINTS["teams"])
-    if "__error" in data:
-        logger.error(f"Failed to refresh team cache: {data['__error']}")
-        return
 
-    try:
-        leagues = data.get("sports", [])[0].get("leagues", [])
-        teams = leagues[0].get("teams", []) if leagues else []
-        
-        new_cache = {}
-        for item in teams:
-            t = item.get("team", {})
-            team_id = str(t.get("id"))
-            meta = {
-                "id": team_id,
-                "displayName": t.get("displayName"),
-                "abbr": t.get("abbreviation", "").lower(),
-                "slug": t.get("slug", ""),
-                "schedule_url": f"https://site.api.espn.com/apis/site/v2/sports/football/nfl/teams/{team_id}/schedule"
-            }
-            if meta["displayName"]: new_cache[meta["displayName"].lower()] = meta
-            if meta["abbr"]: new_cache[meta["abbr"]] = meta
-            new_cache[team_id] = meta
-            
-        _TEAM_CACHE = new_cache
-        _TEAM_CACHE_LAST = now
-    except Exception as e:
-        logger.error(f"Parsing error in team cache: {e}")
+    with _TEAM_CACHE_LOCK:
+        # Re-check now that we hold the lock — another thread may have
+        # already refreshed the cache while we were waiting.
+        now = time.time()
+        if _TEAM_CACHE and now - _TEAM_CACHE_LAST < CACHE_TTL:
+            return
+
+        data = fetch_json(ENDPOINTS["teams"])
+        if "__error" in data:
+            logger.error(f"Failed to refresh team cache: {data['__error']}")
+            return
+
+        try:
+            leagues = data.get("sports", [])[0].get("leagues", [])
+            teams = leagues[0].get("teams", []) if leagues else []
+
+            new_cache = {}
+            for item in teams:
+                t = item.get("team", {})
+                team_id = str(t.get("id"))
+                meta = {
+                    "id": team_id,
+                    "displayName": t.get("displayName"),
+                    "abbr": t.get("abbreviation", "").lower(),
+                    "slug": t.get("slug", ""),
+                    "schedule_url": f"https://site.api.espn.com/apis/site/v2/sports/football/nfl/teams/{team_id}/schedule"
+                }
+                if meta["displayName"]: new_cache[meta["displayName"].lower()] = meta
+                if meta["abbr"]: new_cache[meta["abbr"]] = meta
+                new_cache[team_id] = meta
+
+            _TEAM_CACHE = new_cache
+            _TEAM_CACHE_LAST = now
+        except Exception as e:
+            logger.error(f"Parsing error in team cache: {e}")
 
 
 def detect_team_from_query(query: str) -> Optional[str]:
@@ -397,11 +414,20 @@ def get_last_game(team_name: str) -> str:
 
 def _ensure_player_cache():
     global _PLAYER_CACHE, _PLAYER_CACHE_LAST
-    if _PLAYER_CACHE and (time.time() - _PLAYER_CACHE_LAST) < CACHE_TTL: return
-    data = fetch_json(ENDPOINTS["sleeper_players"])
-    if "__error" not in data:
-        _PLAYER_CACHE = data
-        _PLAYER_CACHE_LAST = time.time()
+    if _PLAYER_CACHE and (time.time() - _PLAYER_CACHE_LAST) < CACHE_TTL:
+        return
+
+    with _PLAYER_CACHE_LOCK:
+        # Re-check — another thread may have refreshed it while we waited.
+        # This matters a lot here: the Sleeper player dump is several MB,
+        # and _dispatch() can trigger this from 2-3 threads on a single
+        # multi-intent query (e.g. "compare X vs Y" fans out per player).
+        if _PLAYER_CACHE and (time.time() - _PLAYER_CACHE_LAST) < CACHE_TTL:
+            return
+        data = fetch_json(ENDPOINTS["sleeper_players"])
+        if "__error" not in data:
+            _PLAYER_CACHE = data
+            _PLAYER_CACHE_LAST = time.time()
 
 
 def get_player_profile_smart(user_input: str) -> Union[str, Dict[str, Any]]:
