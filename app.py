@@ -322,9 +322,6 @@ for message in st.session_state.messages:
 # ------------------------------------------------------------------
 # Input Handling — text or voice
 # ------------------------------------------------------------------
-# ------------------------------------------------------------------
-# Input Handling — text or voice
-# ------------------------------------------------------------------
 # st.chat_input only auto-docks to the bottom of the viewport when it's
 # called directly at the root of the script — nesting it inside
 # st.columns() (as the mic button previously did) silently breaks that

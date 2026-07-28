@@ -184,3 +184,67 @@ class TestUpdateConvState:
         state = chatbot._update_conv_state(parsed, current)
         assert state["mode"] == "trade"
         assert state["player_give"] == "Hill"
+
+
+# ─── Rate limiting ─────────────────────────────────────────────────
+
+class TestRateLimit:
+    """
+    A plain dict stands in for st.session_state here — real Streamlit
+    session state supports the same .get()/[]= interface _check_rate_limit
+    actually uses, so this exercises the real logic without needing a
+    live Streamlit runtime.
+    """
+
+    def test_first_call_allowed(self):
+        chatbot.st.session_state = {}
+        assert chatbot._check_rate_limit() is None
+        assert chatbot.st.session_state["rate_limit"]["session_count"] == 1
+
+    def test_allows_up_to_the_burst_limit(self):
+        chatbot.st.session_state = {}
+        for _ in range(chatbot._RATE_LIMIT_MAX_PER_WINDOW):
+            assert chatbot._check_rate_limit() is None
+
+    def test_blocks_after_burst_limit_exceeded(self):
+        chatbot.st.session_state = {}
+        for _ in range(chatbot._RATE_LIMIT_MAX_PER_WINDOW):
+            chatbot._check_rate_limit()
+        msg = chatbot._check_rate_limit()
+        assert msg is not None
+        assert "fast" in msg.lower()
+
+    def test_window_resets_after_expiry(self):
+        chatbot.st.session_state = {}
+        for _ in range(chatbot._RATE_LIMIT_MAX_PER_WINDOW):
+            chatbot._check_rate_limit()
+        assert chatbot._check_rate_limit() is not None  # blocked
+
+        # Simulate the burst window having fully elapsed
+        rl = chatbot.st.session_state["rate_limit"]
+        rl["window_start"] -= chatbot._RATE_LIMIT_WINDOW_SECONDS + 1
+        assert chatbot._check_rate_limit() is None  # allowed again
+
+    def test_blocks_after_session_cap_exceeded(self):
+        chatbot.st.session_state = {
+            "rate_limit": {
+                "window_start": __import__("time").time(),
+                "window_count": 0,
+                "session_count": chatbot._RATE_LIMIT_SESSION_CAP,
+            }
+        }
+        msg = chatbot._check_rate_limit()
+        assert msg is not None
+        assert "session" in msg.lower()
+
+    def test_session_cap_persists_even_after_window_reset(self):
+        # A blocked session should stay blocked even once the burst
+        # window would otherwise have reset — the hard cap is absolute.
+        chatbot.st.session_state = {
+            "rate_limit": {
+                "window_start": 0,  # long expired
+                "window_count": 0,
+                "session_count": chatbot._RATE_LIMIT_SESSION_CAP,
+            }
+        }
+        assert chatbot._check_rate_limit() is not None

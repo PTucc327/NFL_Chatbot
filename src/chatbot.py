@@ -17,6 +17,7 @@ Uses the google.genai SDK (v2+).
 import json
 import logging
 import os
+import time
 from typing import Optional, Union, Dict, Any, Generator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -50,6 +51,49 @@ GEMINI_MODEL = "gemini-2.5-flash"
 # -------------------------------------------------------
 # Gemini Client
 # -------------------------------------------------------
+
+# -------------------------------------------------------
+# Basic Rate Limiting (per browser session, no external infra needed)
+# -------------------------------------------------------
+# Every user message costs at least 2 Gemini calls (intent extraction +
+# response formatting). Without a cap, a bug that loops, or someone just
+# hammering the app, has an unbounded cost. This is intentionally simple —
+# a rolling short-burst window plus a hard per-session ceiling — since
+# st.session_state already gives free per-user isolation with zero setup.
+_RATE_LIMIT_WINDOW_SECONDS = 60    # burst window length
+_RATE_LIMIT_MAX_PER_WINDOW = 10    # max messages within that window
+_RATE_LIMIT_SESSION_CAP    = 150   # hard cap for the whole session
+
+
+def _check_rate_limit() -> Optional[str]:
+    """Returns a user-facing message if the caller is rate-limited, else None."""
+    now = time.time()
+    rl = st.session_state.get(
+        "rate_limit", {"window_start": now, "window_count": 0, "session_count": 0}
+    )
+
+    if rl["session_count"] >= _RATE_LIMIT_SESSION_CAP:
+        st.session_state["rate_limit"] = rl
+        return (
+            f"⚠️ You've hit this session's message limit "
+            f"({_RATE_LIMIT_SESSION_CAP} messages). Please refresh the page "
+            f"to start a new session."
+        )
+
+    if now - rl["window_start"] >= _RATE_LIMIT_WINDOW_SECONDS:
+        rl["window_start"] = now
+        rl["window_count"] = 0
+
+    if rl["window_count"] >= _RATE_LIMIT_MAX_PER_WINDOW:
+        wait = max(1, int(_RATE_LIMIT_WINDOW_SECONDS - (now - rl["window_start"])))
+        st.session_state["rate_limit"] = rl
+        return f"⚠️ You're sending messages a bit fast — please wait ~{wait}s and try again."
+
+    rl["window_count"]  += 1
+    rl["session_count"] += 1
+    st.session_state["rate_limit"] = rl
+    return None
+
 
 def _get_gemini_client() -> genai.Client:
     if "gemini_client" not in st.session_state:
@@ -217,7 +261,9 @@ def _fetch_one(intent: str, team: Optional[str], player: Optional[str],
             return intent, get_player_injury(name) if name else "Which player's injury status?"
 
         elif intent == "fantasy":
-            name = player or raw_query
+            name = player
+            if not name:
+                return intent, "Which player do you want fantasy info for?"
             sit_start_kw = {"start", "sit", "bench", "lineup", "waiver", "should i"}
             if any(kw in raw_query.lower() for kw in sit_start_kw):
                 return intent, get_fantasy_sit_start(name, team)
@@ -257,7 +303,11 @@ def _fetch_one(intent: str, team: Optional[str], player: Optional[str],
 
 def _dispatch(parsed: Dict[str, Any]) -> Dict[str, Any]:
     """Run all intent fetches in parallel."""
-    intents  = parsed.get("intents", ["general"])
+    # .get(..., ["general"]) only falls back when the key is *missing* —
+    # if Gemini returns "intents": [] (present but empty), that default
+    # never kicks in and max_workers below becomes 0, which crashes
+    # ThreadPoolExecutor outright. `or` catches both cases.
+    intents  = parsed.get("intents") or ["general"]
     team     = parsed.get("team")
     player   = parsed.get("player")
     player_b = parsed.get("player_b")
@@ -296,6 +346,9 @@ Guidelines:
 - For waiver wire: list players in rank order, give a one-line reason for each pickup.
 - If data is missing, say so and suggest an alternative.
 - Keep responses under 300 words unless detail is requested.
+- If the user's question has nothing to do with football, briefly say that's
+  outside what you help with and steer back to NFL topics — don't just answer
+  it as a general-purpose assistant.
 """
 
 def _build_format_prompt(user_input: str, data_results: Dict[str, Any],
@@ -413,6 +466,11 @@ def nfl_chatbot_with_context(user_input: str) -> Union[str, Dict[str, Any], Gene
         "conv_state":  st.session_state.get("conv_state", {}),
     }
     conversation_history = st.session_state.get("messages", [])
+
+    # Step 0 — rate limit check, before any Gemini call is made
+    limit_msg = _check_rate_limit()
+    if limit_msg:
+        return limit_msg
 
     # Step 1 — understand
     parsed = _extract_intent(user_input, context)
