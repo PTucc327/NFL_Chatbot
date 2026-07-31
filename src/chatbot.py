@@ -31,6 +31,7 @@ from src.api_client import (
     get_next_game,
     get_last_game,
     get_team_news,
+    get_league_headlines,
     get_player_profile_smart,
     get_player_injury,
     get_player_weekly_stats,
@@ -170,6 +171,8 @@ Allowed intents (pick ALL that apply — multi-intent is supported):
   last_game   — result of the most recently completed game
   standings   — win/loss records and division/conference rankings
   news        — team or league news and headlines
+  league_news — general NFL news not tied to one team ("around the league",
+                "biggest storylines", "what's happening in the NFL")
   schedule    — upcoming game schedule
   player      — player profile, career stats, or scouting report
   injury      — player injury status, practice participation, return timeline
@@ -195,6 +198,10 @@ Rules:
 - If the query mentions injury, hurt, questionable, IR, or practice → use "injury" intent.
 - If the query mentions start, sit, bench, or lineup → use "fantasy" intent.
 - If the query is ambiguous, pick the most likely intent.
+- Use "news" when a specific team is named or implied. Use "league_news"
+  when the question is about the NFL broadly — no specific team, phrases
+  like "around the league", "biggest storylines". Both can appear
+  together, e.g. intents=["news","league_news"].
 """
 
 def _extract_intent(user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
@@ -248,6 +255,9 @@ def _fetch_one(intent: str, team: Optional[str], player: Optional[str],
 
         elif intent == "news":
             return intent, get_team_news(team or "NFL")
+
+        elif intent == "league_news":
+            return intent, get_league_headlines()
 
         elif intent == "schedule":
             return intent, get_next_game(team) if team else "Please specify a team."
@@ -440,7 +450,7 @@ def _update_conv_state(parsed: Dict[str, Any],
             return current_state  # keep the existing state
 
     # New unrelated intent — clear state
-    if intents & {"scores", "standings", "news", "schedule", "last_game", "injury", "odds"}:
+    if intents & {"scores", "standings", "news", "league_news", "schedule", "last_game", "injury", "odds"}:
         return {}
 
     return current_state  # preserve state for ambiguous intents

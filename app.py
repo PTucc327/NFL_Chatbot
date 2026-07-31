@@ -23,6 +23,28 @@ from src.chatbot import nfl_chatbot_with_context
 load_dotenv()
 
 # ------------------------------------------------------------------
+# Local profile persistence — favorite team/player survive app
+# restarts, not just the current browser session. Deliberately simple
+# (a small JSON file next to the user's home dir) since this is a
+# single-user local app, not something needing a real database.
+# ------------------------------------------------------------------
+_PREFS_PATH = os.path.join(os.path.expanduser("~"), ".nfl_chatbot_prefs.json")
+
+def _load_prefs() -> dict:
+    try:
+        with open(_PREFS_PATH, "r") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _save_prefs(prefs: dict) -> None:
+    try:
+        with open(_PREFS_PATH, "w") as f:
+            json.dump(prefs, f)
+    except Exception:
+        pass  # non-fatal — profile just won't persist across restarts
+
+# ------------------------------------------------------------------
 # Page Configuration
 # ------------------------------------------------------------------
 st.set_page_config(
@@ -127,10 +149,10 @@ st.markdown("""
 
     .empty-state {
         text-align: center;
-        padding: 60px 20px 20px 20px;
+        padding: 36px 20px 16px 20px;
         color: #7c8ba0;
+        font-size: 14.5px;
     }
-    .empty-state .icon { font-size: 46px; margin-bottom: 10px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -141,6 +163,8 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 if "last_mentioned" not in st.session_state:
     st.session_state["last_mentioned"] = None
+if "profile" not in st.session_state:
+    st.session_state["profile"] = _load_prefs()  # {"team": ..., "player": ...}
 
 THINKING_MESSAGES = [
     "Checking the box score...",
@@ -169,7 +193,6 @@ EXAMPLE_PROMPTS = [
     "How did the Eagles do today?",
     "Tell me about Josh Allen",
     "What are Bills fantasy stats this week?",
-    "Who's leading the AFC East?",
 ]
 
 # ------------------------------------------------------------------
@@ -201,8 +224,91 @@ def team_logo_url(display_name: str) -> str:
 with st.sidebar:
     st.markdown("### 🏈 Pro-Bot Tools")
 
+    # Voice input lives here now instead of the main chat area — keeps
+    # the chat surface focused purely on the conversation itself.
+    voice_input = speech_to_text(
+        language="en",
+        start_prompt="🎙️ Tap to speak",
+        stop_prompt="⏹️ Stop recording",
+        just_once=True,           # auto-clears after one recording, so it
+                                   # won't keep resubmitting on reruns
+        use_container_width=True,
+        key="voice_input",
+    )
+
     if st.session_state["last_mentioned"]:
         st.info(f"💬 Focused on **{st.session_state['last_mentioned'].title()}**")
+
+    sidebar_prompt = None
+
+    # ------------------------------------------------------------
+    # My Profile — set once, remembered across restarts. Separate
+    # from the Quick Lookup dropdown below, which is for browsing
+    # *any* team on demand rather than personalizing to "my team".
+    # ------------------------------------------------------------
+    st.divider()
+    st.caption("MY PROFILE")
+
+    profile = st.session_state["profile"]
+    fav_team = profile.get("team")
+    fav_player = profile.get("player")
+
+    if fav_team or fav_player:
+        if fav_team:
+            flog = team_logo_url(fav_team)
+            pcol, tcol = st.columns([1, 3])
+            with pcol:
+                if flog:
+                    st.image(flog, width=36)
+            with tcol:
+                st.markdown(f"**{fav_team}**")
+        if fav_player:
+            st.caption(f"⭐ {fav_player}")
+
+        if st.button("🔔 Get My Updates", use_container_width=True, type="primary"):
+            asks = []
+            if fav_team:
+                asks.append(
+                    f"For the {fav_team}: how they did in their last game, when "
+                    f"their next game is, the latest news, and where they stand "
+                    f"in the standings."
+                )
+            if fav_player:
+                asks.append(
+                    f"For {fav_player}: their latest stats, fantasy outlook, and "
+                    f"injury status."
+                )
+            asks.append("Also give me the biggest storylines around the league right now.")
+            sidebar_prompt = "Give me my personalized update. " + " ".join(asks)
+
+        with st.expander("Edit profile"):
+            options = ["(none)"] + TEAM_NAMES
+            new_team = st.selectbox(
+                "Favorite team", options,
+                index=options.index(fav_team) if fav_team in options else 0,
+                key="profile_team_edit",
+            )
+            new_player = st.text_input("Favorite player", value=fav_player or "",
+                                        key="profile_player_edit")
+            if st.button("Save", key="save_profile_edit", use_container_width=True):
+                st.session_state["profile"] = {
+                    "team": None if new_team == "(none)" else new_team,
+                    "player": new_player.strip() or None,
+                }
+                _save_prefs(st.session_state["profile"])
+                st.rerun()
+    else:
+        st.caption("Set a favorite team or player for one-click personalized updates.")
+        new_team = st.selectbox("Favorite team", ["(none)"] + TEAM_NAMES, key="profile_team_setup")
+        new_player = st.text_input("Favorite player (optional)", placeholder="e.g. Josh Allen",
+                                    key="profile_player_setup")
+        if st.button("Save Profile", use_container_width=True):
+            st.session_state["profile"] = {
+                "team": None if new_team == "(none)" else new_team,
+                "player": new_player.strip() or None,
+            }
+            _save_prefs(st.session_state["profile"])
+            st.rerun()
 
     st.divider()
     st.caption("QUICK LOOKUP")
@@ -213,63 +319,63 @@ with st.sidebar:
     if logo:
         st.image(logo, width=64)
 
-    sidebar_prompt = None
-
-    # Hero action — a reason to open the app even with no question in mind.
-    # Reuses the existing multi-intent pipeline (last_game + schedule + news +
-    # standings all in one Gemini extraction pass) rather than new backend code.
+    # The one clear default action — everything else is one click away
+    # inside the expanders below, not competing for attention up front.
     if st.button("📋 Daily Briefing", use_container_width=True, type="primary"):
         sidebar_prompt = (
             f"Give me a quick daily briefing for the {team_choice}: how they did "
             f"in their last game, when their next game is, the latest news, and "
-            f"where they stand in the division."
+            f"where they stand in the division. Also give me the biggest "
+            f"storylines around the league right now."
         )
 
-    c1, c2 = st.columns(2)
-    if c1.button("📊 Standings", use_container_width=True):
-        sidebar_prompt = f"How are the {team_choice} looking in the standings?"
-    if c2.button("📰 News", use_container_width=True):
-        sidebar_prompt = f"What's the latest news for the {team_choice}?"
-    c3, c4 = st.columns(2)
-    if c3.button("⏭️ Next Game", use_container_width=True):
-        sidebar_prompt = f"When is the next game for the {team_choice}?"
-    if c4.button("⏮️ Last Game", use_container_width=True):
-        sidebar_prompt = f"How did the {team_choice} do in their last game?"
+    with st.expander(f"More for the {team_choice.split()[-1]}"):
+        c1, c2 = st.columns(2)
+        if c1.button("📊 Standings", use_container_width=True):
+            sidebar_prompt = f"How are the {team_choice} looking in the standings?"
+        if c2.button("📰 News", use_container_width=True):
+            sidebar_prompt = f"What's the latest news for the {team_choice}?"
+        c3, c4 = st.columns(2)
+        if c3.button("⏭️ Next Game", use_container_width=True):
+            sidebar_prompt = f"When is the next game for the {team_choice}?"
+        if c4.button("⏮️ Last Game", use_container_width=True):
+            sidebar_prompt = f"How did the {team_choice} do in their last game?"
+        c5, c6 = st.columns(2)
+        if c5.button("🔴 Live Scores", use_container_width=True):
+            sidebar_prompt = "What are the latest scores from today's games?"
+        if c6.button("🌎 League News", use_container_width=True):
+            sidebar_prompt = "What are the biggest storylines around the NFL right now?"
 
-    if st.button("🔴 Refresh Live Scores", use_container_width=True):
-        sidebar_prompt = "What are the latest scores from today's games?"
+    with st.expander("🏆 Fantasy Tools"):
+        st.caption("PLAYER LOOKUP")
+        p_name = st.text_input("Player name", label_visibility="collapsed",
+                                placeholder="Player name, e.g. CeeDee Lamb")
+        fc1, fc2 = st.columns(2)
+        if fc1.button("💰 Fantasy", use_container_width=True) and p_name:
+            sidebar_prompt = f"Can you give me a fantasy breakdown for {p_name}?"
+        if fc2.button("🏥 Injury", use_container_width=True) and p_name:
+            sidebar_prompt = f"What is the injury status for {p_name}?"
 
-    st.divider()
-    st.caption("FANTASY")
-    p_name = st.text_input("Player name", label_visibility="collapsed",
-                            placeholder="Player name, e.g. CeeDee Lamb")
-    if st.button("💰 Fantasy Breakdown", use_container_width=True) and p_name:
-        sidebar_prompt = f"Can you give me a fantasy breakdown for {p_name}?"
-    if st.button("🏥 Injury Report", use_container_width=True) and p_name:
-        sidebar_prompt = f"What is the injury status for {p_name}?"
+        st.caption("COMPARE & TRADE")
+        p1 = st.text_input("Player 1", label_visibility="collapsed",
+                            placeholder="Player 1", key="cmp_p1")
+        p2 = st.text_input("Player 2", label_visibility="collapsed",
+                            placeholder="Player 2", key="cmp_p2")
+        cc1, cc2 = st.columns(2)
+        if cc1.button("⚔️ Compare", use_container_width=True) and p1 and p2:
+            sidebar_prompt = f"Compare {p1} vs {p2}"
+        if cc2.button("🔄 Trade", use_container_width=True) and p1 and p2:
+            sidebar_prompt = f"Should I trade {p1} for {p2}?"
 
-    st.divider()
-    st.caption("COMPARE & TRADE")
-    p1 = st.text_input("Player 1", label_visibility="collapsed",
-                        placeholder="Player 1", key="cmp_p1")
-    p2 = st.text_input("Player 2", label_visibility="collapsed",
-                        placeholder="Player 2", key="cmp_p2")
-    cc1, cc2 = st.columns(2)
-    if cc1.button("⚔️ Compare", use_container_width=True) and p1 and p2:
-        sidebar_prompt = f"Compare {p1} vs {p2}"
-    if cc2.button("🔄 Trade", use_container_width=True) and p1 and p2:
-        sidebar_prompt = f"Should I trade {p1} for {p2}?"
-
-    st.divider()
-    st.caption("WAIVER WIRE")
-    waiver_pos = st.selectbox("Position", ["Any", "QB", "RB", "WR", "TE"],
-                               label_visibility="collapsed", key="waiver_pos")
-    if st.button("🏆 Waiver Targets", use_container_width=True):
-        sidebar_prompt = (
-            "Who are the best waiver wire pickups right now?"
-            if waiver_pos == "Any"
-            else f"Who are the best {waiver_pos} waiver wire pickups right now?"
-        )
+        st.caption("WAIVER WIRE")
+        waiver_pos = st.selectbox("Position", ["Any", "QB", "RB", "WR", "TE"],
+                                   label_visibility="collapsed", key="waiver_pos")
+        if st.button("Waiver Targets", use_container_width=True):
+            sidebar_prompt = (
+                "Who are the best waiver wire pickups right now?"
+                if waiver_pos == "Any"
+                else f"Who are the best {waiver_pos} waiver wire pickups right now?"
+            )
 
     st.divider()
     if st.button("🗑️ Clear Conversation", use_container_width=True):
@@ -297,7 +403,6 @@ example_prompt = None
 if not st.session_state.messages:
     st.markdown("""
     <div class="empty-state">
-        <div class="icon">🎙️</div>
         <div>Ask about scores, standings, news, schedules, or fantasy stats.</div>
     </div>
     """, unsafe_allow_html=True)
@@ -320,22 +425,8 @@ for message in st.session_state.messages:
             st.markdown(f'<div class="msg-time">{ts}</div>', unsafe_allow_html=True)
 
 # ------------------------------------------------------------------
-# Input Handling — text or voice
+# Input Handling — text (voice input lives in the sidebar now)
 # ------------------------------------------------------------------
-# st.chat_input only auto-docks to the bottom of the viewport when it's
-# called directly at the root of the script — nesting it inside
-# st.columns() (as the mic button previously did) silently breaks that
-# pinning, so it stops tracking the bottom as the transcript grows.
-# The mic control now sits on its own row above it instead.
-voice_input = speech_to_text(
-    language="en",
-    start_prompt="🎙️ Tap to speak",
-    stop_prompt="⏹️ Stop recording",
-    just_once=True,           # auto-clears after one recording, so it
-                               # won't keep resubmitting on reruns
-    use_container_width=True,
-    key="voice_input",
-)
 user_input = st.chat_input("Ex: 'How did the Giants do today?' or 'Tell me about Josh Allen'")
 
 final_query = sidebar_prompt or example_prompt or voice_input or user_input

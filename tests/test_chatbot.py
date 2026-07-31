@@ -23,6 +23,7 @@ _api_mock.get_standings.return_value   = "AFC East standings"
 _api_mock.get_next_game.return_value   = "Bills vs Chiefs Sunday"
 _api_mock.get_last_game.return_value   = "Bills 24 - Patriots 17 (Final)"
 _api_mock.get_team_news.return_value   = "Bills sign new WR"
+_api_mock.get_league_headlines.return_value = "Around the NFL right now..."
 _api_mock.get_player_profile_smart.return_value = "### Josh Allen\n- Team: BUF"
 _api_mock.get_player_injury.return_value        = "🏥 Josh Allen — Healthy"
 _api_mock.get_player_weekly_stats.return_value  = "Wk 17: 30 pts"
@@ -140,6 +141,32 @@ class TestDispatch:
         _api_mock.get_waiver_recommendations.reset_mock()
         result = self._run(["waiver"], player="WR")
         _api_mock.get_waiver_recommendations.assert_called_with(position="WR")
+
+    def test_league_news_intent_calls_league_headlines(self):
+        result = self._run(["league_news"])
+        assert "league_news" in result
+        _api_mock.get_league_headlines.assert_called()
+
+    def test_news_and_league_news_are_independent(self):
+        # A briefing-style request should be able to pull team news AND
+        # league-wide headlines in the same dispatch — they hit different
+        # backend functions and shouldn't collide on the same result key.
+        result = self._run(["news", "league_news"], team="Buffalo Bills")
+        assert "news" in result and "league_news" in result
+        _api_mock.get_team_news.assert_called_with("Buffalo Bills")
+        _api_mock.get_league_headlines.assert_called()
+
+    def test_fantasy_without_player_asks_clarifying_question(self):
+        # Regression test — this intent used to silently pass the entire
+        # raw query string as a player name instead of asking who.
+        _api_mock.get_fantasy_sit_start.reset_mock()
+        _api_mock.get_fantasy_player_stats.reset_mock()
+        result = self._run(["fantasy"], player=None, raw="who should i start this week")
+        assert "fantasy" in result
+        assert isinstance(result["fantasy"], str)
+        assert "which player" in result["fantasy"].lower()
+        _api_mock.get_fantasy_sit_start.assert_not_called()
+        _api_mock.get_fantasy_player_stats.assert_not_called()
 
 
 # ─── _update_conv_state ───────────────────────────────────────────

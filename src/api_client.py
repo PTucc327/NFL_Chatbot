@@ -209,6 +209,43 @@ def _fetch_rss_thread(url: str) -> List[Dict[str, str]]:
         return []
 
 
+def get_league_headlines(limit: int = 5) -> str:
+    """
+    Fetches general NFL news not tied to any one team — for 'what's
+    happening around the league' style questions. Unlike get_team_news(),
+    this doesn't score/filter articles against team-name tokens; the
+    sources themselves are already league-wide.
+    """
+    sources = [
+        "https://sports.yahoo.com/nfl/rss.xml",
+        "https://profootballtalk.nbcsports.com/feed/",
+        "https://news.google.com/rss/search?q=NFL",
+    ]
+
+    all_articles = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {executor.submit(_fetch_rss_thread, url): url for url in sources}
+        for future in concurrent.futures.as_completed(futures):
+            all_articles.extend(future.result())
+
+    seen = set()
+    deduped = []
+    for art in all_articles:
+        key = (art.get("title") or "").strip().lower()
+        if key and key not in seen:
+            seen.add(key)
+            deduped.append(art)
+
+    if not deduped:
+        return "Couldn't pull any league headlines right now — try again in a bit."
+
+    md = ["🏈 **Around the NFL right now:**\n"]
+    for a in deduped[:limit]:
+        md.append(f"- ⭐ **[{a['title']}]({a['link']})**")
+
+    return "\n".join(md)
+
+
 def get_team_news(team_name: str) -> str:
     """Fetches and ranks multi-source NFL news with a narrative tone."""
     if not team_name: return "I'd love to find some news for you! Which team are we talking about? 🏈"
