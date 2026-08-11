@@ -120,8 +120,12 @@ def to_et(dt: Optional[datetime.datetime]) -> str:
         from zoneinfo import ZoneInfo
         et_tz = ZoneInfo("America/New_York")
     except ImportError:
+        # zoneinfo not available (Python < 3.9 without backport).
+        # Approximate DST: EDT (UTC-4) Mar–Nov, EST (UTC-5) otherwise.
         from datetime import timezone, timedelta
-        et_tz = timezone(timedelta(hours=-5))
+        month = dt.month  # already UTC-aware at this point
+        offset = -4 if 3 <= month <= 11 else -5
+        et_tz = timezone(timedelta(hours=offset))
 
     et_dt = dt.astimezone(et_tz)
 

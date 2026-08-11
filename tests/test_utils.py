@@ -117,3 +117,18 @@ class TestToEt:
         dt = datetime.datetime(2025, 9, 7, 17, 0, 0)
         result = to_et(dt)
         assert "ET" in result
+
+    def test_dst_offset_in_summer(self):
+        # July = EDT (UTC-4): 17:00 UTC → 13:00 ET
+        dt = datetime.datetime(2025, 7, 15, 17, 0, 0, tzinfo=datetime.timezone.utc)
+        result = to_et(dt)
+        assert "ET" in result
+        # The converted hour should be 13 (1 PM), not 12 (UTC-5 would give 12)
+        assert "01:00 PM ET" in result
+
+    def test_standard_time_offset_in_winter(self):
+        # January = EST (UTC-5): 20:00 UTC → 15:00 ET
+        dt = datetime.datetime(2025, 1, 12, 20, 0, 0, tzinfo=datetime.timezone.utc)
+        result = to_et(dt)
+        assert "ET" in result
+        assert "03:00 PM ET" in result

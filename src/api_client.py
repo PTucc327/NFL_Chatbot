@@ -36,7 +36,9 @@ from src.utils import (
 # -------------------------
 # Configuration & Endpoints
 # -------------------------
-CACHE_TTL = 60 * 60 * 6 
+CACHE_TTL = 60 * 60 * 6          # 6 hours — team metadata, standings, scores
+INJURY_CACHE_TTL = 60 * 60 * 4   # 4 hours — player/injury cache (practice reports
+                                  # land Wed/Thu/Fri and go stale quickly in-season)
 REQUEST_TIMEOUT = 10
 
 ENDPOINTS = {
@@ -93,6 +95,29 @@ def _build_lookup(records: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
 # Load once at module import time; reload by calling these again if needed
 _LEGENDS: Dict[str, Dict[str, Any]] = _build_lookup(_load_static_data("legends.json"))
 _PROSPECTS: Dict[str, Dict[str, Any]] = _build_lookup(_load_static_data("prospects.json"))
+
+def _load_rosters() -> Dict[str, Any]:
+    """
+    Loads data/rosters.json produced by scripts/update_data.py.
+    Returns the full dict (with _meta + rosters keys), or an empty
+    structure if the file hasn't been generated yet.
+    """
+    path = os.path.join(_DATA_DIR, "rosters.json")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        # Accept both the wrapped format {_meta, rosters} and a bare dict
+        return data if "rosters" in data else {"rosters": data, "_meta": {}}
+    except FileNotFoundError:
+        logger.warning(
+            "data/rosters.json not found — run scripts/update_data.py to generate it."
+        )
+        return {"rosters": {}, "_meta": {}}
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse rosters.json: {e}")
+        return {"rosters": {}, "_meta": {}}
+
+_ROSTERS_DATA: Dict[str, Any] = _load_rosters()
 
 # -------------------------
 # Local Caches
@@ -449,9 +474,84 @@ def get_last_game(team_name: str) -> str:
     return f"In their last outing, here's how it finished: {' - '.join(scores)} ({to_et(parse_iso_datetime(past[0].get('date')))}). 🏟️"
 
 
+def get_team_roster(team_name: str, position: Optional[str] = None) -> str:
+    """
+    Returns the current depth chart for a team from the weekly-refreshed
+    data/rosters.json file.  Falls back to the Sleeper live cache when
+    rosters.json hasn't been generated yet.
+
+    Args:
+        team_name: Full team name, abbreviation, or nickname.
+        position:  Optional filter — "QB", "WR", etc.
+    """
+    # Resolve the team abbreviation via the team cache
+    meta = find_team(team_name)
+    if not meta:
+        return f"I couldn't find a team named '{team_name}'."
+
+    abbr = meta.get("abbr", "").upper()
+    display = meta.get("displayName", team_name)
+
+    rosters = _ROSTERS_DATA.get("rosters", {})
+    players  = rosters.get(abbr, [])
+
+    # If rosters.json hasn't been populated yet, fall back to the live Sleeper cache
+    if not players:
+        _ensure_player_cache()
+        players = [
+            p for p in _PLAYER_CACHE.values()
+            if (p.get("team") or "").upper() == abbr and p.get("active")
+        ]
+        if not players:
+            updated = _ROSTERS_DATA.get("_meta", {}).get("updated_at", "never")
+            return (
+                f"I don't have a current roster for the {display} yet. "
+                f"(Last data refresh: {updated}). "
+                f"Run `python scripts/update_data.py` to fetch the latest rosters."
+            )
+
+    # Apply position filter
+    pos_filter = position.upper().strip() if position else None
+    if pos_filter:
+        players = [p for p in players if p.get("position") == pos_filter]
+        if not players:
+            return f"No {pos_filter}s found on the {display} roster right now."
+
+    # Group by position for a readable depth chart
+    POS_ORDER = {"QB": 0, "RB": 1, "WR": 2, "TE": 3, "K": 4,
+                 "DE": 5, "DT": 6, "LB": 7, "CB": 8, "S": 9}
+    groups: Dict[str, List] = {}
+    for p in players:
+        pos = p.get("position", "?")
+        groups.setdefault(pos, []).append(p)
+
+    # Sort each position group by depth order
+    for pos in groups:
+        groups[pos].sort(
+            key=lambda x: x.get("depth_chart_order") if x.get("depth_chart_order") is not None else 99
+        )
+
+    updated = _ROSTERS_DATA.get("_meta", {}).get("updated_at", "unknown")
+    lines = [f"📋 **{display} Roster**  *(last refreshed: {updated[:10]})*\n"]
+
+    pos_labels = list(sorted(groups.keys(), key=lambda p: POS_ORDER.get(p, 99)))
+    for pos in pos_labels:
+        group = groups[pos]
+        lines.append(f"**{pos}**")
+        for i, p in enumerate(group, 1):
+            name   = p.get("full_name", "Unknown")
+            inj    = p.get("injury_status")
+            inj_str = f" ⚠️ {inj}" if inj else ""
+            depth_label = {1: "Starter", 2: "Backup", 3: "3rd"}.get(i, f"#{i}")
+            lines.append(f"  {i}. {name} ({depth_label}){inj_str}")
+        lines.append("")
+
+    return "\n".join(lines).rstrip()
+
+
 def _ensure_player_cache():
     global _PLAYER_CACHE, _PLAYER_CACHE_LAST
-    if _PLAYER_CACHE and (time.time() - _PLAYER_CACHE_LAST) < CACHE_TTL:
+    if _PLAYER_CACHE and (time.time() - _PLAYER_CACHE_LAST) < INJURY_CACHE_TTL:
         return
 
     with _PLAYER_CACHE_LOCK:
@@ -459,7 +559,7 @@ def _ensure_player_cache():
         # This matters a lot here: the Sleeper player dump is several MB,
         # and _dispatch() can trigger this from 2-3 threads on a single
         # multi-intent query (e.g. "compare X vs Y" fans out per player).
-        if _PLAYER_CACHE and (time.time() - _PLAYER_CACHE_LAST) < CACHE_TTL:
+        if _PLAYER_CACHE and (time.time() - _PLAYER_CACHE_LAST) < INJURY_CACHE_TTL:
             return
         data = fetch_json(ENDPOINTS["sleeper_players"])
         if "__error" not in data:
@@ -473,15 +573,19 @@ def get_player_profile_smart(user_input: str) -> Union[str, Dict[str, Any]]:
 
     # ---------------------------------------------------------
     # LAYER 1: Retired Legends (History & Awards)
-    # Loaded from data/legends.json — add entries there to expand coverage
+    # Loaded from data/legends.json — add entries there to expand coverage.
+    # Skip this layer for active players so they get live stats + depth chart.
     # ---------------------------------------------------------
     if q in _LEGENDS:
         l = _LEGENDS[q]
-        return (f"### 🏛️ Legend: {l['name']}\n"
-                f"- **Status:** {l['status']}\n"
-                f"- **Teams:** {l['teams']}\n"
-                f"- **Career Stats:** {l['stats']}\n"
-                f"- **Awards:** {l['awards']}")
+        # If the player is still active, fall through to the live Sleeper lookup
+        # so the user gets current stats, injury status, and depth chart.
+        if not l.get("status", "").startswith("Active"):
+            return (f"### 🏛️ Legend: {l['name']}\n"
+                    f"- **Status:** {l['status']}\n"
+                    f"- **Teams:** {l['teams']}\n"
+                    f"- **Career Stats:** {l['stats']}\n"
+                    f"- **Awards:** {l['awards']}")
 
     # ---------------------------------------------------------
     # LAYER 2: College Prospects (Stats & Draft)
@@ -738,6 +842,8 @@ def get_fantasy_sit_start(player_name: str, opponent_team: Optional[str] = None)
 def get_game_odds(team_name: str) -> str:
     """Retrieves Vegas betting lines for a specific team."""
     data = fetch_json(ENDPOINTS["scoreboard"])
+    if "__error" in data:
+        return "I'm having trouble reaching the scoreboard for betting lines right now. Try again in a moment."
     for event in data.get("events", []):
         comp = event.get("competitions", [{}])[0]
         teams = [c['team']['displayName'] for c in comp.get("competitors", [])]

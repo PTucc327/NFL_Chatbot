@@ -41,12 +41,17 @@ from src.api_client import (
     get_trade_analysis,
     get_waiver_recommendations,
     get_game_odds,
+    get_team_roster,
     detect_team_from_query,
 )
 
 logger = logging.getLogger(__name__)
 
 GEMINI_MODEL = "gemini-2.5-flash"
+
+# Position strings that the extraction prompt places in the "player" slot
+# for roster/waiver queries filtered by position.
+VALID_POSITIONS = {"QB", "RB", "WR", "TE", "K", "DE", "DT", "LB", "CB", "S"}
 
 
 # -------------------------------------------------------
@@ -181,6 +186,7 @@ Allowed intents (pick ALL that apply — multi-intent is supported):
   trade       — fantasy trade evaluation between two named players
   waiver      — waiver wire pickup recommendations, optionally filtered by position
   odds        — betting lines, spread, over/under
+  roster      — team depth chart, "who is the backup QB", "list the receivers"
   general     — anything else NFL-related
 
 Rules:
@@ -197,6 +203,9 @@ Rules:
 - Normalise team names to their full name (e.g. "pats" -> "New England Patriots").
 - If the query mentions injury, hurt, questionable, IR, or practice → use "injury" intent.
 - If the query mentions start, sit, bench, or lineup → use "fantasy" intent.
+- If the query mentions roster, depth chart, backup, who starts, who plays → use "roster" intent.
+  - If a position is mentioned (QB, RB, WR, TE, etc.) alongside the roster question,
+    set "player" to that position string (e.g. "WR").
 - If the query is ambiguous, pick the most likely intent.
 - Use "news" when a specific team is named or implied. Use "league_news"
   when the question is about the NFL broadly — no specific team, phrases
@@ -302,6 +311,13 @@ def _fetch_one(intent: str, team: Optional[str], player: Optional[str],
 
         elif intent == "odds":
             return intent, get_game_odds(team) if team else "Which team's betting lines?"
+
+        elif intent == "roster":
+            if not team:
+                return intent, "Which team's roster would you like to see?"
+            # position hint stored in player slot (mirrors waiver pattern)
+            pos = player if player and player.upper() in VALID_POSITIONS else None
+            return intent, get_team_roster(team, position=pos)
 
         else:
             return intent, None  # general — Gemini answers from knowledge
@@ -450,7 +466,8 @@ def _update_conv_state(parsed: Dict[str, Any],
             return current_state  # keep the existing state
 
     # New unrelated intent — clear state
-    if intents & {"scores", "standings", "news", "league_news", "schedule", "last_game", "injury", "odds"}:
+    if intents & {"scores", "standings", "news", "league_news", "schedule",
+                  "last_game", "injury", "odds", "roster"}:
         return {}
 
     return current_state  # preserve state for ambiguous intents

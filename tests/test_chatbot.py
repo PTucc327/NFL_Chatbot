@@ -275,3 +275,82 @@ class TestRateLimit:
             }
         }
         assert chatbot._check_rate_limit() is not None
+
+
+# ─── stream_response ──────────────────────────────────────────────
+
+class TestStreamResponse:
+    """
+    Validates the stream_response short-circuit:
+    when the only data results are disambiguation dicts, stream_response
+    must yield nothing so app.py falls through to the disambiguation UI.
+    """
+
+    def test_disambiguation_only_yields_nothing(self):
+        disambig = {"type": "selection_required", "message": "Which Josh?", "matches": []}
+        gen = chatbot.stream_response(
+            "josh allen", {"player": disambig}, [], {}
+        )
+        chunks = list(gen)
+        assert chunks == [], (
+            "stream_response must yield no tokens when all results are disambiguation dicts"
+        )
+
+    def test_string_data_triggers_streaming(self):
+        # When there's real string data, _stream_gemini is called.
+        # We mock it to return a known token.
+        with mock.patch.object(chatbot, "_stream_gemini", return_value=iter(["✅ test"])):
+            gen = chatbot.stream_response(
+                "bills score", {"scores": "Bills 24 – Pats 17"}, [], {}
+            )
+            chunks = list(gen)
+        assert "✅ test" in chunks
+
+    def test_mixed_dict_and_string_still_streams(self):
+        # Disambiguation dict + a real string result: streaming should proceed
+        # (the dict is skipped by the non_dict filter).
+        disambig = {"type": "selection_required", "message": "Who?", "matches": []}
+        with mock.patch.object(chatbot, "_stream_gemini", return_value=iter(["streamed"])):
+            gen = chatbot.stream_response(
+                "test", {"player": disambig, "scores": "Bills win"}, [], {}
+            )
+            chunks = list(gen)
+        assert "streamed" in chunks
+
+
+# ─── _extract_intent error fallback ───────────────────────────────
+
+class TestExtractIntentFallback:
+    """
+    _extract_intent must degrade gracefully when Gemini returns an error
+    sentinel or malformed JSON — never raise, always return a valid dict.
+    """
+
+    def test_config_error_returns_general_intent(self):
+        with mock.patch.object(chatbot, "_call_gemini",
+                               return_value="__CONFIG_ERROR__: no key"):
+            result = chatbot._extract_intent("bills score", {})
+        assert result["intents"] == ["general"]
+        assert "__error" in result
+
+    def test_api_error_returns_general_intent(self):
+        with mock.patch.object(chatbot, "_call_gemini",
+                               return_value="__API_ERROR__"):
+            result = chatbot._extract_intent("bills score", {})
+        assert result["intents"] == ["general"]
+
+    def test_malformed_json_returns_general_intent(self):
+        with mock.patch.object(chatbot, "_call_gemini",
+                               return_value="this is not json {{{"):
+            result = chatbot._extract_intent("bills score", {})
+        assert result["intents"] == ["general"]
+        assert "player" in result
+        assert "team" in result
+
+    def test_empty_intents_list_still_dispatches(self):
+        # _dispatch must not crash when Gemini returns intents=[]
+        parsed = {"intents": [], "team": None, "player": None,
+                  "player_b": None, "raw_query": "test"}
+        result = chatbot._dispatch(parsed)
+        # Falls back to ["general"] internally — general returns None
+        assert result.get("general") is None

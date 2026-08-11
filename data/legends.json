@@ -8,20 +8,20 @@
     "awards": "7x SB Champ, 3x MVP, 5x SB MVP, 15x Pro Bowl"
   },
   {
-    "name": "Eli Manning",
-    "pos": "QB",
-    "status": "Retired",
-    "teams": "NY Giants (2004-2019)",
-    "stats": "57,023 Yds, 366 TDs",
-    "awards": "2x SB MVP, 4x Pro Bowl, Walter Payton Man of the Year"
-  },
-  {
     "name": "Peyton Manning",
     "pos": "QB",
     "status": "Retired (HOF 2021)",
     "teams": "Colts, Broncos",
     "stats": "71,940 Yds, 539 TDs",
     "awards": "2x SB Champ, 5x MVP, 14x Pro Bowl"
+  },
+  {
+    "name": "Joe Montana",
+    "pos": "QB",
+    "status": "Retired (HOF 2000)",
+    "teams": "49ers, Chiefs",
+    "stats": "40,551 Yds, 273 TDs",
+    "awards": "4x SB Champ, 3x SB MVP, 2x MVP, 8x Pro Bowl"
   },
   {
     "name": "Jerry Rice",
@@ -35,7 +35,7 @@
     "name": "Lawrence Taylor",
     "pos": "LB",
     "status": "Retired (HOF 1999)",
-    "teams": "NY Giants (1981-1993)",
+    "teams": "NY Giants",
     "stats": "132.5 Sacks, 1,088 Tackles",
     "awards": "2x SB Champ, 2x Defensive POY, 3x All-Pro, 10x Pro Bowl"
   },
@@ -43,7 +43,7 @@
     "name": "Barry Sanders",
     "pos": "RB",
     "status": "Retired (HOF 2004)",
-    "teams": "Detroit Lions (1989-1998)",
+    "teams": "Detroit Lions",
     "stats": "15,269 Rush Yds, 99 Rush TDs",
     "awards": "1x MVP, 10x Pro Bowl, 6x All-Pro"
   },
@@ -59,24 +59,16 @@
     "name": "Walter Payton",
     "pos": "RB",
     "status": "Retired (HOF 1993)",
-    "teams": "Chicago Bears (1975-1987)",
+    "teams": "Chicago Bears",
     "stats": "16,726 Rush Yds, 110 Rush TDs",
     "awards": "1x SB Champ, 2x MVP, 9x Pro Bowl"
-  },
-  {
-    "name": "Joe Montana",
-    "pos": "QB",
-    "status": "Retired (HOF 2000)",
-    "teams": "49ers, Chiefs",
-    "stats": "40,551 Yds, 273 TDs",
-    "awards": "4x SB Champ, 3x SB MVP, 2x MVP, 8x Pro Bowl"
   },
   {
     "name": "Reggie White",
     "pos": "DE",
     "status": "Retired (HOF 2006)",
     "teams": "Eagles, Packers, Panthers",
-    "stats": "198 Sacks (NFL Record at retirement)",
+    "stats": "198 Sacks",
     "awards": "1x SB Champ, 2x Defensive POY, 13x Pro Bowl"
   },
   {
@@ -99,7 +91,7 @@
     "name": "Ray Lewis",
     "pos": "LB",
     "status": "Retired (HOF 2018)",
-    "teams": "Baltimore Ravens (1996-2012)",
+    "teams": "Baltimore Ravens",
     "stats": "2,059 Tackles, 41.5 Sacks, 31 INTs",
     "awards": "2x SB Champ, 1x SB MVP, 2x Defensive POY, 13x Pro Bowl"
   },
@@ -108,15 +100,775 @@
     "pos": "CB",
     "status": "Retired (HOF 2011)",
     "teams": "Falcons, 49ers, Cowboys, Commanders, Ravens",
-    "stats": "53 INTs, 9 Defensive TDs",
+    "stats": "53 INTs, 9 Def TDs",
     "awards": "2x SB Champ, 1x Defensive POY, 8x Pro Bowl"
   },
   {
     "name": "Dan Marino",
     "pos": "QB",
     "status": "Retired (HOF 2005)",
-    "teams": "Miami Dolphins (1983-1999)",
+    "teams": "Miami Dolphins",
     "stats": "61,361 Yds, 420 TDs",
     "awards": "1x MVP, 9x Pro Bowl"
+  },
+  {
+    "name": "Eli Manning",
+    "pos": "QB",
+    "status": "Retired",
+    "teams": "NY Giants",
+    "stats": "57,023 Yds, 366 TDs",
+    "awards": "2x SB MVP, 4x Pro Bowl"
+  },
+  {
+    "name": "John Elway",
+    "pos": "QB",
+    "status": "Retired (HOF 2004)",
+    "teams": "Denver Broncos",
+    "stats": "51,475 Yds, 300 TDs",
+    "awards": "2x SB Champ, 1x SB MVP, 1x MVP, 9x Pro Bowl"
+  },
+  {
+    "name": "Steve Young",
+    "pos": "QB",
+    "status": "Retired (HOF 2005)",
+    "teams": "49ers, Buccaneers",
+    "stats": "33,124 Yds, 232 TDs, 96.8 Career Passer Rating",
+    "awards": "1x SB Champ, 1x SB MVP, 2x MVP, 7x Pro Bowl"
+  },
+  {
+    "name": "Troy Aikman",
+    "pos": "QB",
+    "status": "Retired (HOF 2006)",
+    "teams": "Dallas Cowboys",
+    "stats": "32,942 Yds, 165 TDs",
+    "awards": "3x SB Champ, 1x SB MVP, 6x Pro Bowl"
+  },
+  {
+    "name": "Terry Bradshaw",
+    "pos": "QB",
+    "status": "Retired (HOF 1989)",
+    "teams": "Pittsburgh Steelers",
+    "stats": "27,989 Yds, 212 TDs",
+    "awards": "4x SB Champ, 2x SB MVP, 3x Pro Bowl"
+  },
+  {
+    "name": "Johnny Unitas",
+    "pos": "QB",
+    "status": "Retired (HOF 1979)",
+    "teams": "Colts, Chargers",
+    "stats": "40,239 Yds, 290 TDs",
+    "awards": "1x NFL Champ, 3x MVP, 10x Pro Bowl"
+  },
+  {
+    "name": "Roger Staubach",
+    "pos": "QB",
+    "status": "Retired (HOF 1985)",
+    "teams": "Dallas Cowboys",
+    "stats": "22,700 Yds, 153 TDs",
+    "awards": "2x SB Champ, 1x SB MVP, 6x Pro Bowl"
+  },
+  {
+    "name": "Ben Roethlisberger",
+    "pos": "QB",
+    "status": "Retired",
+    "teams": "Pittsburgh Steelers",
+    "stats": "64,088 Yds, 418 TDs",
+    "awards": "2x SB Champ, 6x Pro Bowl"
+  },
+  {
+    "name": "Drew Brees",
+    "pos": "QB",
+    "status": "Retired",
+    "teams": "Chargers, Saints",
+    "stats": "80,358 Yds, 571 TDs",
+    "awards": "1x SB Champ, 1x SB MVP, 1x Offensive POY, 13x Pro Bowl"
+  },
+  {
+    "name": "Aaron Rodgers",
+    "pos": "QB",
+    "status": "Active (Jets)",
+    "teams": "Packers, Jets",
+    "stats": "59,055+ Yds, 475+ TDs",
+    "awards": "1x SB Champ, 1x SB MVP, 4x MVP, 10x Pro Bowl"
+  },
+  {
+    "name": "Philip Rivers",
+    "pos": "QB",
+    "status": "Retired",
+    "teams": "Chargers, Colts",
+    "stats": "63,440 Yds, 421 TDs",
+    "awards": "8x Pro Bowl"
+  },
+  {
+    "name": "Jim Brown",
+    "pos": "RB",
+    "status": "Retired (HOF 1971)",
+    "teams": "Cleveland Browns",
+    "stats": "12,312 Rush Yds, 106 Rush TDs",
+    "awards": "1x NFL Champ, 3x MVP, 9x Pro Bowl, 8x All-Pro"
+  },
+  {
+    "name": "Eric Dickerson",
+    "pos": "RB",
+    "status": "Retired (HOF 1999)",
+    "teams": "Rams, Colts, Raiders, Falcons",
+    "stats": "13,259 Rush Yds, 2,105 Yds in 1984 (single-season record)",
+    "awards": "1x Offensive ROY, 6x Pro Bowl"
+  },
+  {
+    "name": "Tony Dorsett",
+    "pos": "RB",
+    "status": "Retired (HOF 1994)",
+    "teams": "Cowboys, Broncos",
+    "stats": "12,739 Rush Yds, 77 Rush TDs",
+    "awards": "1x SB Champ, 1x Offensive ROY, 4x Pro Bowl"
+  },
+  {
+    "name": "Marshall Faulk",
+    "pos": "RB",
+    "status": "Retired (HOF 2011)",
+    "teams": "Colts, Rams",
+    "stats": "12,279 Rush Yds, 767 Rec, 19,154 Total Yds",
+    "awards": "1x SB Champ, 1x Offensive POY, 7x Pro Bowl"
+  },
+  {
+    "name": "LaDainian Tomlinson",
+    "pos": "RB",
+    "status": "Retired (HOF 2017)",
+    "teams": "Chargers, Jets",
+    "stats": "13,684 Rush Yds, 145 Rush TDs (then-record)",
+    "awards": "1x MVP, 5x Pro Bowl, 2x All-Pro"
+  },
+  {
+    "name": "Terrell Davis",
+    "pos": "RB",
+    "status": "Retired (HOF 2017)",
+    "teams": "Denver Broncos",
+    "stats": "7,607 Rush Yds, 2,008 Yds (SB-winning season)",
+    "awards": "2x SB Champ, 1x SB MVP, 1x Offensive POY, 3x Pro Bowl"
+  },
+  {
+    "name": "Franco Harris",
+    "pos": "RB",
+    "status": "Retired (HOF 1990)",
+    "teams": "Steelers, Seahawks",
+    "stats": "12,120 Rush Yds, 91 TDs",
+    "awards": "4x SB Champ, 1x SB MVP, 9x Pro Bowl"
+  },
+  {
+    "name": "Earl Campbell",
+    "pos": "RB",
+    "status": "Retired (HOF 1991)",
+    "teams": "Oilers, Saints",
+    "stats": "9,407 Rush Yds, 74 TDs",
+    "awards": "1x Offensive ROY, 1x MVP, 5x Pro Bowl"
+  },
+  {
+    "name": "Adrian Peterson",
+    "pos": "RB",
+    "status": "Retired",
+    "teams": "Vikings, Saints, Cardinals, Commanders, Titans, Lions, Seahawks",
+    "stats": "14,820 Rush Yds, 2,097 Yds (2012 record), 120 TDs",
+    "awards": "1x MVP, 7x Pro Bowl, 4x All-Pro"
+  },
+  {
+    "name": "Marcus Allen",
+    "pos": "RB",
+    "status": "Retired (HOF 2003)",
+    "teams": "Raiders, Chiefs",
+    "stats": "12,243 Rush Yds, 145 TDs",
+    "awards": "1x SB Champ, 1x SB MVP, 1x MVP, 6x Pro Bowl"
+  },
+  {
+    "name": "Terrell Owens",
+    "pos": "WR",
+    "status": "Retired (HOF 2018)",
+    "teams": "49ers, Eagles, Cowboys, Bills, Bengals, Seahawks",
+    "stats": "15,934 Rec Yds, 153 TDs",
+    "awards": "6x Pro Bowl, 3x All-Pro"
+  },
+  {
+    "name": "Cris Carter",
+    "pos": "WR",
+    "status": "Retired (HOF 2013)",
+    "teams": "Eagles, Vikings, Dolphins",
+    "stats": "13,899 Rec Yds, 130 TDs",
+    "awards": "8x Pro Bowl, 2x All-Pro"
+  },
+  {
+    "name": "Marvin Harrison",
+    "pos": "WR",
+    "status": "Retired (HOF 2016)",
+    "teams": "Indianapolis Colts",
+    "stats": "14,580 Rec Yds, 128 TDs, 143 Rec (single-season record)",
+    "awards": "1x SB Champ, 8x Pro Bowl, 3x All-Pro"
+  },
+  {
+    "name": "Calvin Johnson",
+    "pos": "WR",
+    "status": "Retired (HOF 2021)",
+    "teams": "Detroit Lions",
+    "stats": "11,619 Rec Yds, 83 TDs, 1,964 Rec Yds (2012 record)",
+    "awards": "6x Pro Bowl, 3x All-Pro"
+  },
+  {
+    "name": "Steve Largent",
+    "pos": "WR",
+    "status": "Retired (HOF 1995)",
+    "teams": "Seattle Seahawks",
+    "stats": "13,089 Rec Yds, 100 TDs",
+    "awards": "7x Pro Bowl, 1x Biletnikoff Award"
+  },
+  {
+    "name": "Shannon Sharpe",
+    "pos": "TE",
+    "status": "Retired (HOF 2011)",
+    "teams": "Broncos, Ravens",
+    "stats": "10,060 Rec Yds, 62 TDs",
+    "awards": "3x SB Champ, 8x Pro Bowl, 4x All-Pro"
+  },
+  {
+    "name": "Tony Gonzalez",
+    "pos": "TE",
+    "status": "Retired (HOF 2019)",
+    "teams": "Chiefs, Falcons",
+    "stats": "15,127 Rec Yds, 111 TDs",
+    "awards": "14x Pro Bowl, 5x All-Pro"
+  },
+  {
+    "name": "John Mackey",
+    "pos": "TE",
+    "status": "Retired (HOF 1992)",
+    "teams": "Colts, Chargers",
+    "stats": "5,236 Rec Yds, 38 TDs",
+    "awards": "1x SB Champ, 5x Pro Bowl"
+  },
+  {
+    "name": "Ronnie Lott",
+    "pos": "S",
+    "status": "Retired (HOF 2000)",
+    "teams": "49ers, Raiders, Jets, Chiefs",
+    "stats": "63 INTs, 8 Defensive TDs",
+    "awards": "4x SB Champ, 10x Pro Bowl, 8x All-Pro"
+  },
+  {
+    "name": "Dick Butkus",
+    "pos": "LB",
+    "status": "Retired (HOF 1979)",
+    "teams": "Chicago Bears",
+    "stats": "22 INTs, 27 Fumble Recoveries",
+    "awards": "8x Pro Bowl, 6x All-Pro"
+  },
+  {
+    "name": "Jack Ham",
+    "pos": "LB",
+    "status": "Retired (HOF 1988)",
+    "teams": "Pittsburgh Steelers",
+    "stats": "32 INTs, 21 Fumble Recoveries",
+    "awards": "4x SB Champ, 8x Pro Bowl, 6x All-Pro"
+  },
+  {
+    "name": "Jack Lambert",
+    "pos": "LB",
+    "status": "Retired (HOF 1990)",
+    "teams": "Pittsburgh Steelers",
+    "stats": "28 INTs, 17 Fumble Recoveries",
+    "awards": "4x SB Champ, 1x Defensive ROY, 9x Pro Bowl"
+  },
+  {
+    "name": "Mike Singletary",
+    "pos": "LB",
+    "status": "Retired (HOF 1998)",
+    "teams": "Chicago Bears",
+    "stats": "1,488 Tackles, 19 INTs",
+    "awards": "1x SB Champ, 2x Defensive POY, 10x Pro Bowl"
+  },
+  {
+    "name": "Chuck Bednarik",
+    "pos": "LB/C",
+    "status": "Retired (HOF 1967)",
+    "teams": "Philadelphia Eagles",
+    "stats": "Last 60-minute two-way player; 1960 NFL Champ",
+    "awards": "1x NFL Champ, 8x Pro Bowl"
+  },
+  {
+    "name": "Merlin Olsen",
+    "pos": "DT",
+    "status": "Retired (HOF 1982)",
+    "teams": "Los Angeles Rams",
+    "stats": "Fearsome Foursome anchor",
+    "awards": "14x Pro Bowl, 2x All-Pro"
+  },
+  {
+    "name": "Joe Greene",
+    "pos": "DT",
+    "status": "Retired (HOF 1987)",
+    "teams": "Pittsburgh Steelers",
+    "stats": "Cornerstone of Steel Curtain",
+    "awards": "4x SB Champ, 2x Defensive POY, 10x Pro Bowl"
+  },
+  {
+    "name": "Bruce Smith",
+    "pos": "DE",
+    "status": "Retired (HOF 2009)",
+    "teams": "Bills, Commanders",
+    "stats": "200 Sacks (NFL Record)",
+    "awards": "4x AFC Champ, 2x Defensive POY, 11x Pro Bowl"
+  },
+  {
+    "name": "Gino Marchetti",
+    "pos": "DE",
+    "status": "Retired (HOF 1972)",
+    "teams": "Dallas Texans, Baltimore Colts",
+    "stats": "Regarded as greatest DE of pre-merger era",
+    "awards": "2x NFL Champ, 11x Pro Bowl"
+  },
+  {
+    "name": "Rod Woodson",
+    "pos": "CB/S",
+    "status": "Retired (HOF 2009)",
+    "teams": "Steelers, 49ers, Ravens, Raiders",
+    "stats": "71 INTs (4th all-time), 12 Def TDs",
+    "awards": "1x SB Champ, 2x Defensive POY, 11x Pro Bowl"
+  },
+  {
+    "name": "Night Train Lane",
+    "pos": "CB",
+    "status": "Retired (HOF 1974)",
+    "teams": "Rams, Cardinals, Lions",
+    "stats": "68 INTs (then-record), 14 INTs in 1952 (still NFL record)",
+    "awards": "7x Pro Bowl"
+  },
+  {
+    "name": "Mel Blount",
+    "pos": "CB",
+    "status": "Retired (HOF 1989)",
+    "teams": "Pittsburgh Steelers",
+    "stats": "57 INTs, 13 Def TDs",
+    "awards": "4x SB Champ, 1x Defensive POY, 5x Pro Bowl"
+  },
+  {
+    "name": "Mike Webster",
+    "pos": "C",
+    "status": "Retired (HOF 1997)",
+    "teams": "Steelers, Chiefs",
+    "stats": "220 consecutive starts",
+    "awards": "4x SB Champ, 9x Pro Bowl, 4x All-Pro"
+  },
+  {
+    "name": "Anthony Munoz",
+    "pos": "OT",
+    "status": "Retired (HOF 1998)",
+    "teams": "Cincinnati Bengals",
+    "stats": "Widely considered greatest OT in NFL history",
+    "awards": "2x AFC Champ, 11x Pro Bowl, 9x All-Pro"
+  },
+  {
+    "name": "Orlando Pace",
+    "pos": "OT",
+    "status": "Retired (HOF 2016)",
+    "teams": "St. Louis Rams, Bears",
+    "stats": "Key block for Greatest Show on Turf",
+    "awards": "1x SB Champ, 7x Pro Bowl, 4x All-Pro"
+  },
+  {
+    "name": "Jim Parker",
+    "pos": "OT/OG",
+    "status": "Retired (HOF 1973)",
+    "teams": "Baltimore Colts",
+    "stats": "First pure offensive lineman inducted into HOF",
+    "awards": "8x Pro Bowl, 6x All-Pro"
+  },
+  {
+    "name": "Mick Tingelhoff",
+    "pos": "C",
+    "status": "Retired (HOF 2015)",
+    "teams": "Minnesota Vikings",
+    "stats": "240 consecutive starts",
+    "awards": "6x Pro Bowl, 5x All-Pro"
+  },
+  {
+    "name": "Alan Page",
+    "pos": "DT",
+    "status": "Retired (HOF 1988)",
+    "teams": "Vikings, Bears",
+    "stats": "173.5 Sacks (unofficial), 28 Fumble Recoveries",
+    "awards": "4x NFC Champ, 1x Defensive POY (1st DL MVP), 9x Pro Bowl"
+  },
+  {
+    "name": "Sam Mills",
+    "pos": "LB",
+    "status": "Retired (HOF 2022)",
+    "teams": "Saints, Panthers",
+    "stats": "1,319 Tackles, 11 Sacks, 11 INTs",
+    "awards": "5x Pro Bowl"
+  },
+  {
+    "name": "Dwight Stephenson",
+    "pos": "C",
+    "status": "Retired (HOF 1998)",
+    "teams": "Miami Dolphins",
+    "stats": "Considered one of the best centers ever; 6 seasons",
+    "awards": "5x Pro Bowl, 4x All-Pro"
+  },
+  {
+    "name": "Eric Metcalf",
+    "pos": "RB/KR",
+    "status": "Retired",
+    "teams": "Browns, Falcons, Chargers, Cardinals, Panthers, Commanders, Packers",
+    "stats": "10,315 All-Purpose Yds, 10 KR/PR TDs",
+    "awards": "3x Pro Bowl"
+  },
+  {
+    "name": "Gale Sayers",
+    "pos": "RB",
+    "status": "Retired (HOF 1977)",
+    "teams": "Chicago Bears",
+    "stats": "4,956 Rush Yds, 22 TDs in rookie year",
+    "awards": "4x Pro Bowl, 2x All-Pro, youngest HOF inductee (34)"
+  },
+  {
+    "name": "Patrick Mahomes",
+    "pos": "QB",
+    "status": "Active (Chiefs)",
+    "teams": "Kansas City Chiefs",
+    "stats": "32,000+ Yds, 240+ TDs through 2025",
+    "awards": "3x SB Champ, 2x SB MVP, 2x MVP, 6x Pro Bowl"
+  },
+  {
+    "name": "Travis Kelce",
+    "pos": "TE",
+    "status": "Active (Chiefs)",
+    "teams": "Kansas City Chiefs",
+    "stats": "12,000+ Rec Yds, 75+ TDs",
+    "awards": "3x SB Champ, 9x Pro Bowl, 5x All-Pro, 8 straight 1,000-yd seasons"
+  },
+  {
+    "name": "Josh Allen",
+    "pos": "QB",
+    "status": "Active (Bills)",
+    "teams": "Buffalo Bills",
+    "stats": "25,000+ Pass Yds, 200+ Pass TDs, 60+ Rush TDs through 2025",
+    "awards": "4x Pro Bowl, 1x Offensive POY (2020), multiple All-Pro selections"
+  },
+  {
+    "name": "Justin Jefferson",
+    "pos": "WR",
+    "status": "Active (Vikings)",
+    "teams": "Minnesota Vikings",
+    "stats": "7,000+ Rec Yds, 40+ TDs through 2025 — fastest to 5,000 Rec Yds",
+    "awards": "4x Pro Bowl, 2x All-Pro, 1x Offensive POY (2022)"
+  },
+  {
+    "name": "Tyreek Hill",
+    "pos": "WR",
+    "status": "Active (Dolphins)",
+    "teams": "Chiefs, Dolphins",
+    "stats": "9,000+ Rec Yds, 75+ TDs; 1,799 Rec Yds in 2023 (then single-season record)",
+    "awards": "7x Pro Bowl, 2x All-Pro, 3x SB Champ (with KC)"
+  },
+  {
+    "name": "Davante Adams",
+    "pos": "WR",
+    "status": "Active (Raiders/Jets)",
+    "teams": "Packers, Raiders, Jets",
+    "stats": "9,000+ Rec Yds, 80+ TDs through 2025",
+    "awards": "6x Pro Bowl, 4x All-Pro"
+  },
+  {
+    "name": "CeeDee Lamb",
+    "pos": "WR",
+    "status": "Active (Cowboys)",
+    "teams": "Dallas Cowboys",
+    "stats": "1,749 Rec Yds in 2023; 6,000+ career Rec Yds through 2025",
+    "awards": "3x Pro Bowl, 1x All-Pro"
+  },
+  {
+    "name": "Lamar Jackson",
+    "pos": "QB",
+    "status": "Active (Ravens)",
+    "teams": "Baltimore Ravens",
+    "stats": "20,000+ Pass Yds, 150+ Pass TDs, 5,000+ Rush Yds through 2025",
+    "awards": "2x MVP (2019, 2023), 4x Pro Bowl, 2x All-Pro"
+  },
+  {
+    "name": "Joe Burrow",
+    "pos": "QB",
+    "status": "Active (Bengals)",
+    "teams": "Cincinnati Bengals",
+    "stats": "16,000+ Pass Yds, 120+ TDs through 2025",
+    "awards": "2x Pro Bowl, AFC Champ (2021), 2021 Comeback Player of Year"
+  },
+  {
+    "name": "Ja'Marr Chase",
+    "pos": "WR",
+    "status": "Active (Bengals)",
+    "teams": "Cincinnati Bengals",
+    "stats": "5,000+ Rec Yds, 40+ TDs through 2025; 1,708 Rec Yds as rookie (record)",
+    "awards": "3x Pro Bowl, 1x All-Pro, 2021 Offensive ROY"
+  },
+  {
+    "name": "Cooper Kupp",
+    "pos": "WR",
+    "status": "Active (Rams)",
+    "teams": "Los Angeles Rams",
+    "stats": "1,947 Rec Yds in 2021 (NFL record); 6,000+ career Rec Yds",
+    "awards": "1x SB Champ, 1x SB MVP, 2x Pro Bowl, 1x All-Pro, 2021 Offensive POY"
+  },
+  {
+    "name": "Stefon Diggs",
+    "pos": "WR",
+    "status": "Active",
+    "teams": "Vikings, Bills, Texans",
+    "stats": "9,000+ Rec Yds, 60+ TDs through 2025",
+    "awards": "4x Pro Bowl, 2x All-Pro"
+  },
+  {
+    "name": "George Kittle",
+    "pos": "TE",
+    "status": "Active (49ers)",
+    "teams": "San Francisco 49ers",
+    "stats": "7,000+ Rec Yds, 50+ TDs; 1,377 Rec Yds in 2018 (then TE record)",
+    "awards": "5x Pro Bowl, 3x All-Pro"
+  },
+  {
+    "name": "Derrick Henry",
+    "pos": "RB",
+    "status": "Active (Ravens)",
+    "teams": "Titans, Ravens",
+    "stats": "11,000+ Rush Yds, 100+ TDs; 2,000-yd season in 2019 & 2020",
+    "awards": "2x Rushing Title, 4x Pro Bowl, 2x All-Pro"
+  },
+  {
+    "name": "Nick Bosa",
+    "pos": "DE/EDGE",
+    "status": "Active (49ers)",
+    "teams": "San Francisco 49ers",
+    "stats": "70+ Sacks through 2025",
+    "awards": "2x Defensive POY (2019, 2022), 4x Pro Bowl, 2x All-Pro"
+  },
+  {
+    "name": "Micah Parsons",
+    "pos": "LB/EDGE",
+    "status": "Active (Cowboys)",
+    "teams": "Dallas Cowboys",
+    "stats": "50+ Sacks through 2025",
+    "awards": "4x Pro Bowl, 3x All-Pro, 2021 Defensive ROY"
+  },
+  {
+    "name": "T.J. Watt",
+    "pos": "LB/EDGE",
+    "status": "Active (Steelers)",
+    "teams": "Pittsburgh Steelers",
+    "stats": "100+ Sacks; 22.5 Sacks in 2021 (tied NFL record)",
+    "awards": "1x Defensive POY (2021), 6x Pro Bowl, 4x All-Pro"
+  },
+  {
+    "name": "Myles Garrett",
+    "pos": "DE/EDGE",
+    "status": "Active (Browns/Steelers)",
+    "teams": "Cleveland Browns, Pittsburgh Steelers",
+    "stats": "110+ Sacks through 2025",
+    "awards": "1x Defensive POY (2023), 7x Pro Bowl, 5x All-Pro"
+  },
+  {
+    "name": "Aaron Donald",
+    "pos": "DT",
+    "status": "Retired",
+    "teams": "Los Angeles Rams",
+    "stats": "111 Sacks (NFL record for interior DL), 20+ Forced Fumbles",
+    "awards": "1x SB Champ, 3x Defensive POY, 8x All-Pro, 9x Pro Bowl"
+  },
+  {
+    "name": "Von Miller",
+    "pos": "LB/EDGE",
+    "status": "Active",
+    "teams": "Broncos, Rams, Bills",
+    "stats": "120+ Sacks through 2025",
+    "awards": "2x SB Champ, 1x SB MVP (SB50), 9x Pro Bowl, 4x All-Pro"
+  },
+  {
+    "name": "J.J. Watt",
+    "pos": "DE",
+    "status": "Retired",
+    "teams": "Texans, Cardinals",
+    "stats": "114 Sacks, 28 Passes Defended, 2 Receiving TDs",
+    "awards": "3x Defensive POY (most all-time), 5x All-Pro, 5x Pro Bowl"
+  },
+  {
+    "name": "Calvin Ridley",
+    "pos": "WR",
+    "status": "Active",
+    "teams": "Falcons, Jaguars, Titans",
+    "stats": "5,000+ Rec Yds, 35+ TDs through 2025",
+    "awards": "1x Pro Bowl"
+  },
+  {
+    "name": "Antonio Brown",
+    "pos": "WR",
+    "status": "Retired",
+    "teams": "Steelers, Raiders, Patriots, Buccaneers",
+    "stats": "12,291 Rec Yds, 83 TDs; 7 straight 100+ rec seasons",
+    "awards": "7x Pro Bowl, 4x All-Pro"
+  },
+  {
+    "name": "Dez Bryant",
+    "pos": "WR",
+    "status": "Retired",
+    "teams": "Dallas Cowboys, Saints, Ravens",
+    "stats": "7,459 Rec Yds, 73 TDs",
+    "awards": "3x Pro Bowl, 2x All-Pro"
+  },
+  {
+    "name": "Adrian Wilson",
+    "pos": "S",
+    "status": "Retired (HOF 2023)",
+    "teams": "Arizona Cardinals",
+    "stats": "36 INTs, 850+ Tackles",
+    "awards": "5x Pro Bowl, 2x All-Pro"
+  },
+  {
+    "name": "Ed Reed",
+    "pos": "S",
+    "status": "Retired (HOF 2019)",
+    "teams": "Ravens, Texans, Jets, Cardinals",
+    "stats": "64 INTs (3rd all-time), 13 Defensive TDs",
+    "awards": "1x SB Champ, 1x Defensive POY, 9x Pro Bowl, 7x All-Pro"
+  },
+  {
+    "name": "Troy Polamalu",
+    "pos": "S",
+    "status": "Retired (HOF 2020)",
+    "teams": "Pittsburgh Steelers",
+    "stats": "32 INTs, 12 Forced Fumbles",
+    "awards": "2x SB Champ, 1x Defensive POY, 8x Pro Bowl, 4x All-Pro"
+  },
+  {
+    "name": "Brian Dawkins",
+    "pos": "S",
+    "status": "Retired (HOF 2018)",
+    "teams": "Eagles, Broncos",
+    "stats": "37 INTs, 26 Sacks, 9 Forced Fumbles",
+    "awards": "9x Pro Bowl, 3x All-Pro"
+  },
+  {
+    "name": "Charles Woodson",
+    "pos": "CB/S",
+    "status": "Retired (HOF 2021)",
+    "teams": "Raiders, Packers, Raiders",
+    "stats": "65 INTs (2nd among CBs), 20 Sacks, 11 Def TDs",
+    "awards": "1x SB Champ, 1x Defensive POY, 9x Pro Bowl, 6x All-Pro, 1998 Defensive ROY"
+  },
+  {
+    "name": "Darrell Revis",
+    "pos": "CB",
+    "status": "Retired (HOF 2023)",
+    "teams": "Jets, Buccaneers, Patriots, Chiefs, Jets",
+    "stats": "29 INTs, Revis Island era shut down elite WRs for a decade",
+    "awards": "1x SB Champ (NE), 5x Pro Bowl, 3x All-Pro"
+  },
+  {
+    "name": "Patrick Willis",
+    "pos": "LB",
+    "status": "Retired (HOF 2023)",
+    "teams": "San Francisco 49ers",
+    "stats": "950+ Tackles, 25 Sacks, 17 INTs",
+    "awards": "7x Pro Bowl, 5x All-Pro, 2007 Defensive ROY"
+  },
+  {
+    "name": "Bobby Wagner",
+    "pos": "LB",
+    "status": "Active",
+    "teams": "Seahawks, Rams, Seahawks, Commanders",
+    "stats": "1,600+ Tackles, 30+ Sacks, 20+ INTs through 2025",
+    "awards": "9x Pro Bowl, 6x All-Pro"
+  },
+  {
+    "name": "Richard Sherman",
+    "pos": "CB",
+    "status": "Retired",
+    "teams": "Seahawks, 49ers, Buccaneers",
+    "stats": "36 INTs, 113 PBUs",
+    "awards": "1x SB Champ, 4x Pro Bowl, 3x All-Pro"
+  },
+  {
+    "name": "Luke Kuechly",
+    "pos": "LB",
+    "status": "Retired",
+    "teams": "Carolina Panthers",
+    "stats": "1,092 Tackles, 18 INTs, 12 Sacks",
+    "awards": "7x Pro Bowl, 5x All-Pro, 2012 Defensive ROY, 2013 Defensive POY"
+  },
+  {
+    "name": "Rob Gronkowski",
+    "pos": "TE",
+    "status": "Retired",
+    "teams": "Patriots, Buccaneers",
+    "stats": "9,286 Rec Yds, 92 TDs (most ever by a TE)",
+    "awards": "2x SB Champ, 5x Pro Bowl, 4x All-Pro"
+  },
+  {
+    "name": "Frank Gore",
+    "pos": "RB",
+    "status": "Retired",
+    "teams": "49ers, Colts, Dolphins, Bills, Jets",
+    "stats": "16,000 Rush Yds (3rd all-time), 81 Rush TDs",
+    "awards": "5x Pro Bowl"
+  },
+  {
+    "name": "Peyton Hillis",
+    "pos": "RB",
+    "status": "Retired",
+    "teams": "Broncos, Browns, Chiefs, Giants, Buccaneers",
+    "stats": "3,345 Rush Yds, 28 TDs",
+    "awards": "1x Pro Bowl (2010), Madden 12 cover"
+  },
+  {
+    "name": "Steve McNair",
+    "pos": "QB",
+    "status": "Retired (HOF 2024)",
+    "teams": "Oilers/Titans, Ravens",
+    "stats": "31,304 Pass Yds, 174 TDs",
+    "awards": "1x Co-MVP (2003), 3x Pro Bowl"
+  },
+  {
+    "name": "Donovan McNabb",
+    "pos": "QB",
+    "status": "Retired",
+    "teams": "Philadelphia Eagles, Commanders",
+    "stats": "37,276 Pass Yds, 234 TDs",
+    "awards": "5x Pro Bowl, 4x NFC Champ"
+  },
+  {
+    "name": "Kurt Warner",
+    "pos": "QB",
+    "status": "Retired (HOF 2017)",
+    "teams": "Rams, Giants, Cardinals",
+    "stats": "32,344 Pass Yds, 208 TDs",
+    "awards": "2x SB Champ, 2x SB MVP (SB XXXIV), 2x MVP, 4x Pro Bowl"
+  },
+  {
+    "name": "Randall Cunningham",
+    "pos": "QB",
+    "status": "Retired",
+    "teams": "Eagles, Vikings, Ravens, Cowboys",
+    "stats": "29,979 Pass Yds, 207 TDs, 4,928 Rush Yds",
+    "awards": "4x Pro Bowl, 2x All-Pro"
+  },
+  {
+    "name": "Warren Moon",
+    "pos": "QB",
+    "status": "Retired (HOF 2006)",
+    "teams": "Oilers, Vikings, Chiefs, Seahawks, Chiefs",
+    "stats": "49,325 NFL Yds (+ 21,228 CFL), 291 TDs",
+    "awards": "9x Pro Bowl, 1x All-Pro, first undrafted QB in HOF"
+  },
+  {
+    "name": "Tony Romo",
+    "pos": "QB",
+    "status": "Retired",
+    "teams": "Dallas Cowboys",
+    "stats": "34,183 Pass Yds, 248 TDs, 117.0 Passer Rating (career best by a Cowboy)",
+    "awards": "4x Pro Bowl"
   }
 ]
