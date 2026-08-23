@@ -1,0 +1,47 @@
+name: Weekly Roster Refresh
+
+on:
+  schedule:
+    # Every Tuesday at 10:00 AM UTC (6:00 AM ET during standard time)
+    # Runs after most teams post Monday's injury/practice updates.
+    - cron: '0 10 * * 2'
+  workflow_dispatch:
+    # Also triggerable manually from the Actions tab — useful for
+    # mid-week forced refreshes (e.g. trade deadline, IR moves).
+
+permissions:
+  contents: write   # needed to commit the updated rosters.json back to main
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          # Use a PAT if your repo is private; GITHUB_TOKEN is fine for public.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run roster refresh
+        run: python scripts/update_data.py --rosters
+
+      - name: Commit updated rosters.json
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: weekly roster refresh [skip ci]"
+          file_pattern: data/rosters.json
+          commit_user_name: "github-actions[bot]"
+          commit_user_email: "github-actions[bot]@users.noreply.github.com"
+          # Only commits if the file actually changed — no-op weeks produce
+          # no commit, so the history stays clean.

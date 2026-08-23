@@ -1,0 +1,35 @@
+2026-08-10 20:33:42,133  INFO      ============================================================
+2026-08-10 20:33:42,133  INFO      NFL data update started  
+2026-08-10 20:33:42,133  INFO      ============================================================
+2026-08-10 20:33:42,134  INFO      Fetching Sleeper player dump …
+2026-08-10 20:33:42,896  INFO        12,218 total players in Sleeper dump
+2026-08-10 20:33:42,908  INFO        Built rosters for 32 teams, 1949 players total
+2026-08-10 20:33:42,961  INFO      Wrote rosters.json — 2 records
+2026-08-10 20:33:42,977  INFO      Fetching ESPN draft prospects …
+2026-08-10 20:33:43,099  WARNING   Attempt 1/3 failed for https://site.api.espn.com/apis/v2/sports/football/nfl/draftprospects: 404 Client Error: Not Found for url: https://site.api.espn.com/apis/v2/sports/football/nfl/draftprospects?limit=50
+2026-08-10 20:33:45,185  WARNING   Attempt 2/3 failed for https://site.api.espn.com/apis/v2/sports/football/nfl/draftprospects: 404 Client Error: Not Found for url: https://site.api.espn.com/apis/v2/sports/football/nfl/draftprospects?limit=50
+2026-08-10 20:33:49,289  WARNING   Attempt 3/3 failed for https://site.api.espn.com/apis/v2/sports/football/nfl/draftprospects: 404 Client Error: Not Found for url: https://site.api.espn.com/apis/v2/sports/football/nfl/draftprospects?limit=50
+2026-08-10 20:33:49,290  ERROR     ESPN draft API unavailable: All retries failed for https://site.api.espn.com/apis/v2/sports/football/nfl/draftprospects
+2026-08-10 20:33:49,290  WARNING   Keeping existing prospects.json unchanged.
+2026-08-10 20:33:49,290  INFO      Done in 7.2s
+2026-08-10 20:33:49,290  INFO      ============================================================
+2026-08-10 20:45:18,923  INFO      ============================================================
+2026-08-10 20:45:18,924  INFO      NFL data update started  
+2026-08-10 20:45:18,924  INFO      ============================================================
+2026-08-10 20:45:18,924  INFO      Fetching Sleeper player dump …
+2026-08-10 20:45:19,737  INFO        12,218 total players in Sleeper dump
+2026-08-10 20:45:19,748  INFO        Built rosters for 32 teams, 1949 players total
+2026-08-10 20:45:19,791  INFO      Wrote rosters.json — 2 records
+2026-08-10 20:45:19,804  INFO      Fetching ESPN draft prospects …
+2026-08-10 20:45:19,804  ERROR     Prospects update failed: name 'ESPN_DRAFT_API' is not defined
+2026-08-10 20:45:19,805  INFO      Done in 0.9s
+2026-08-10 20:45:19,805  INFO      ============================================================
+2026-08-15 16:56:42,203  INFO      ============================================================
+2026-08-15 16:56:42,208  INFO      NFL data update started  
+2026-08-15 16:56:42,208  INFO      ============================================================
+2026-08-15 16:56:42,208  INFO      Fetching Sleeper player dump …
+2026-08-15 16:56:43,426  INFO        12,219 total players in Sleeper dump
+2026-08-15 16:56:43,438  INFO        Built rosters for 32 teams, 1948 players total
+2026-08-15 16:56:43,489  INFO      Wrote rosters.json — 2 records
+2026-08-15 16:56:43,505  INFO      Done in 1.3s
+2026-08-15 16:56:43,505  INFO      ============================================================

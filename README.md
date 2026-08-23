@@ -1,51 +1,63 @@
-# 🏈 NFL Pro-Bot: Production NFL AI Assistant
+# 🏈 NFL Pro-Bot
 
-**Project Maintainer**: Paul Tuccinardi  
+**Author**: Paul Tuccinardi  
 **LinkedIn**: [paul-tuccinardi](https://www.linkedin.com/in/paul-tuccinardi/)  
 **GitHub**: [PTucc327](https://github.com/PTucc327)
 
+> AI-powered NFL assistant — live scores, injuries, fantasy stats, and more. Just ask.
+
 ---
 
-## Overview
+## What it does
 
-A production-grade NFL conversational assistant built with **Streamlit** and powered by **Google Gemini 2.5 Flash**. The bot handles natural language queries about scores, standings, player stats, injuries, fantasy football, trade advice, and more — all backed by real-time data from the ESPN and Sleeper APIs.
+NFL Pro-Bot is a production-grade conversational assistant that answers real-time NFL questions in plain English. It's faster than Googling and more accurate than asking a general-purpose chatbot, because it pulls live data — not training-set knowledge.
 
-This project is a cornerstone of my Data Science portfolio, demonstrating end-to-end AI application development: LLM-powered NLU, concurrent API orchestration, stateful multi-turn conversation, and a full pytest test suite.
+```
+"Is Ja'Marr Chase playing Sunday?"
+"Compare Josh Allen to Lamar Jackson"
+"Should I trade Travis Kelce for Davante Adams?"
+"Who are the best WR waiver pickups right now?"
+"Give me a daily briefing on the Eagles"
+```
 
 ---
 
 ## Features
 
-### 🧠 Gemini-Powered NLU
-- Intent extraction via **Google Gemini 2.5 Flash** — no regex, no keyword lists
-- Handles natural phrasing: *"Who should I start this week?"*, *"Compare Josh Allen to Lamar Jackson"*
-- **Multi-intent support**: a single query can trigger multiple parallel data fetches
-- **Stateful multi-turn conversation**: trade and comparison discussions persist across turns
+### Natural Language Understanding
+- Intent extraction via **Google Gemini 2.5 Flash** — no keyword lists or regex rules
+- **Multi-intent**: one query can trigger several parallel data fetches simultaneously
+- **Stateful conversation**: trade and comparison discussions persist across turns
+- Handles typos, nicknames, and shorthand ("pats", "g-men", "bolts")
 
-### 📊 Data Coverage
-| Capability | Source |
+### Data Coverage
+
+| What you can ask | Source |
 |---|---|
-| Live scores (in-progress / final / scheduled) | ESPN API |
-| Standings (full league or single team) | ESPN API |
-| Next game & last game per team | ESPN API |
-| Betting odds (spread + over/under) | ESPN API |
-| Team news (ranked by relevance) | Google News, Yahoo, PFT RSS |
-| Player profiles (active, legends, prospects) | Sleeper API + static JSON |
-| Injury status (status, body part, practice participation, depth chart) | Sleeper API |
+| Live scores (in-progress / final / upcoming) | ESPN API |
+| Standings — full league or single team | ESPN API |
+| Next game & last game result | ESPN API |
+| Betting odds — spread + over/under | ESPN API |
+| Team news, ranked by relevance | Google News · Yahoo Sports · PFT RSS |
+| Player profiles — active, legends (109 HOF/stars), prospects | Sleeper API + static JSON |
+| Injury status — designation, body part, practice participation | Sleeper API (4-hr cache) |
 | Weekly per-game stat lines by position | Sleeper API |
 | Season PPR fantasy totals | Sleeper API |
-| Fantasy sit/start advice with matchup context | Sleeper API + Gemini |
-| **Player comparison (head-to-head stats)** | Sleeper API + Gemini |
-| **Trade advice (give vs receive analysis)** | Sleeper API + Gemini |
-| **Waiver wire recommendations (trend + matchup)** | Sleeper API + Gemini |
+| Fantasy sit/start advice with matchup context | Sleeper + Gemini reasoning |
+| Head-to-head player comparison | Sleeper + Gemini |
+| Trade evaluation — give vs receive verdict | Sleeper + Gemini |
+| Waiver wire targets — weighted trend + schedule difficulty | Sleeper + Gemini |
+| Team depth chart / "who is the backup QB?" | Static `rosters.json` — no API call |
+| League-wide headlines | Yahoo Sports · NBC Sports PFT · Google News RSS |
 
-### ⚡ Engineering Highlights
-- **Streaming responses** — Gemini tokens render live via `st.write_stream()`
-- **Concurrent data fetching** — all intents fetched in parallel with `ThreadPoolExecutor`
-- **Fuzzy name matching** — `rapidfuzz` token_set_ratio with a 2-token guard against false positives
-- **6-hour TTL caching** — team and player caches reduce API load
-- **Exponential backoff** — retries with 1s → 2s → 4s backoff on network errors
-- **64-test pytest suite** — covers utils, API functions, intent routing, and conversation state
+### Engineering Highlights
+- **Streaming responses** — Gemini tokens render live, word-by-word typewriter effect
+- **Concurrent fetching** — all intents dispatched in parallel via `ThreadPoolExecutor`
+- **Tiered cache TTL** — team metadata 6 hrs · player/injury data 4 hrs (freshens before Fri practice reports)
+- **Fuzzy name matching** — `rapidfuzz` token_set_ratio, 2-token guard prevents false positives on bare first names
+- **Exponential backoff** — 1 s → 2 s retries on transient network errors
+- **Rate limiting** — 10 messages/60 s burst cap + 150 messages/session hard ceiling
+- **134-test pytest suite** — covers utils, all API functions, intent routing, and conversation state
 
 ---
 
@@ -53,20 +65,20 @@ This project is a cornerstone of my Data Science portfolio, demonstrating end-to
 
 | Layer | Technology |
 |---|---|
-| UI | Streamlit 1.54 |
-| LLM | Google Gemini 2.5 Flash (`google-genai`) |
-| Voice input | `streamlit-mic-recorder` (browser Web Speech API) |
-| Primary APIs | ESPN Sports API, Sleeper Fantasy API |
-| News | RSS via `feedparser` (Google News, Yahoo Sports, ProFootballTalk) |
+| UI | Streamlit 1.45 |
+| LLM | Google Gemini 2.5 Flash (`google-genai` 2.7) |
+| Voice input | `streamlit-mic-recorder` |
+| Primary APIs | ESPN Sports API · Sleeper Fantasy API |
+| News | `feedparser` — Google News, Yahoo Sports, ProFootballTalk |
 | Fuzzy matching | `rapidfuzz` |
-| Testing | `pytest` |
+| Testing | `pytest` 9 |
 | Config | `python-dotenv` |
 
 ---
 
-## Quick Start
+## Quick Start (local)
 
-### 1. Clone the repository
+### 1. Clone
 ```bash
 git clone https://github.com/PTucc327/NFL_Chatbot.git
 cd NFL_Chatbot
@@ -77,13 +89,15 @@ cd NFL_Chatbot
 pip install -r requirements.txt
 ```
 
-### 3. Configure your Gemini API key
-Get a **free** key at [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey) (free tier: 15 req/min, 1M tokens/day).
+### 3. Configure environment
+Get a **free** Gemini key at [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)  
+(Free tier: 15 req/min, 1M tokens/day — plenty for personal use.)
 
 ```bash
 cp template.env .env
-# Edit .env and add your key:
+# Open .env and set:
 # GEMINI_API_KEY=your_key_here
+# REPO_URL=https://github.com/PTucc327/NFL_Chatbot   ← optional, enables legal links
 ```
 
 ### 4. Run
@@ -93,18 +107,33 @@ streamlit run app.py
 
 ---
 
-## Example Queries
+## Deploying to Streamlit Community Cloud
 
-```
-"How did the Bills do last week?"
-"What are the AFC standings?"
-"Is Patrick Mahomes playing Sunday?"
-"Should I start Tyreek Hill or CeeDee Lamb?"
-"Compare Josh Allen to Lamar Jackson"
-"Should I trade Travis Kelce for Davante Adams?"
-"What are the odds for the Chiefs game?"
-"Give me the latest Patriots news"
-```
+1. Push the repo to GitHub (make sure `.env` is in `.gitignore` — it is by default).
+2. Go to [share.streamlit.io](https://share.streamlit.io) → **New app** → select this repo.
+3. Set **Main file path** to `app.py`.
+4. Under **Advanced settings → Secrets**, add:
+   ```toml
+   GEMINI_API_KEY = "your_key_here"
+   REPO_URL = "https://github.com/PTucc327/NFL_Chatbot"
+   ```
+5. Deploy. The app will be live at a `*.streamlit.app` URL.
+
+> **Never commit `.env` or paste secrets into the code.** The app reads them from environment variables at runtime.
+
+---
+
+## Automated Data Refresh (GitHub Actions)
+
+`rosters.json` — which answers "who is the backup QB?" — is kept fresh by a scheduled GitHub Actions workflow:
+
+- **Runs every Tuesday at 10 AM UTC** (configurable in `.github/workflows/refresh_data.yml`)
+- Pulls the latest Sleeper player dump, rebuilds depth charts and injury fields
+- Auto-commits the updated file back to `main`
+- Streamlit Community Cloud detects the new commit and redeploys automatically
+- Also triggerable manually from the **Actions** tab
+
+No cron server, no scheduled task, no infrastructure needed.
 
 ---
 
@@ -114,7 +143,13 @@ streamlit run app.py
 pytest tests/ -v
 ```
 
-All 71 tests run without a live API key — HTTP calls are mocked.
+134 tests, all run without a live API key — all HTTP calls are mocked.
+
+```
+tests/test_utils.py         # Fuzzy matching, datetime helpers, networking
+tests/test_api_client.py    # All data-fetching functions, cache logic
+tests/test_chatbot.py       # Intent routing, conversation state, rate limiting
+```
 
 ---
 
@@ -122,27 +157,55 @@ All 71 tests run without a live API key — HTTP calls are mocked.
 
 ```
 NFL_Chatbot/
-├── app.py              # Streamlit UI and response rendering
-├── requirements.txt    # Pinned dependencies
-├── template.env        # API key template (copy to .env)
+├── app.py                          # Streamlit UI, consent gate, chat rendering
+├── requirements.txt                # Pinned dependencies
+├── template.env                    # Environment variable reference (copy to .env)
+├── PRIVACY_POLICY.md               # Data handling, third-party services
+├── TERMS_OF_SERVICE.md             # Usage terms, disclaimers, attribution
+│
+├── .github/
+│   └── workflows/
+│       └── refresh_data.yml        # Weekly GitHub Actions roster refresh
+│
 ├── data/
-│   ├── legends.json    # 15 retired legend profiles (add more here)
-│   └── prospects.json  # Draft prospect profiles (add more here)
+│   ├── legends.json                # 109 HOF / retired / active star profiles
+│   ├── prospects.json              # College draft prospect profiles
+│   ├── rosters.json                # Active rosters by team (auto-refreshed weekly)
+│   └── teams.json                  # 32 team names, abbreviations, IDs (static)
+│
+├── scripts/
+│   └── update_data.py              # Roster + prospect refresh script
+│
 ├── src/
-│   ├── api_client.py   # All data fetching functions
-│   ├── chatbot.py      # Gemini pipeline, intent routing, conversation state
-│   └── utils.py        # Fuzzy matching, networking, datetime helpers
+│   ├── api_client.py               # All data-fetching, caching, static data loaders
+│   ├── chatbot.py                  # Gemini pipeline, intent routing, conv state
+│   └── utils.py                    # Fuzzy matching, HTTP helpers, datetime utils
+│
 └── tests/
-    ├── test_utils.py       # 19 tests
-    ├── test_api_client.py  # 25 tests
-    └── test_chatbot.py     # 27 tests
+    ├── test_utils.py
+    ├── test_api_client.py
+    └── test_chatbot.py
 ```
+
+---
+
+## Legal & Privacy
+
+- **No personal data is collected.** Chat history lives only in your browser session.
+- Responses are AI-generated and may be inaccurate — **not for use in sports betting**.
+- Data sourced from ESPN, Sleeper, and public RSS feeds. All team names and marks belong to the NFL.
+- See [PRIVACY_POLICY.md](PRIVACY_POLICY.md) and [TERMS_OF_SERVICE.md](TERMS_OF_SERVICE.md) for full details.
 
 ---
 
 ## Roadmap
 
-- [x] Waiver wire recommendations — ranked pickups with schedule difficulty context
-- [x] Voice input — speech-to-text via `streamlit_mic_recorder`
-- [ ] Analytical dashboard — WR efficiency metrics, team trend visualizations
-- [ ] Expanded legends database — automate updates from Pro Football Reference
+- [x] Waiver wire recommendations with schedule difficulty context
+- [x] Voice input via browser Web Speech API
+- [x] Player comparison and trade evaluation
+- [x] Stateful multi-turn conversation
+- [x] Automated weekly roster refresh (GitHub Actions)
+- [x] Privacy Policy, Terms of Service, consent gate
+- [ ] Analytical dashboard — WR efficiency, team trend visualisations
+- [ ] Historical game log queries ("how did Mahomes do against the Bills last year?")
+- [ ] Push notifications for injuries on user's favourite team

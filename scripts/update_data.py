@@ -31,7 +31,7 @@ import os
 import sys
 import time
 import requests
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 # ── Logging ────────────────────────────────────────────────────────
@@ -158,7 +158,7 @@ def update_rosters(dry_run: bool = False) -> None:
     # Wrap with metadata
     output = {
         "_meta": {
-            "updated_at": datetime.utcnow().isoformat() + "Z",
+            "updated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "total_players": sum(len(v) for v in rosters.values()),
             "teams": len(rosters),
             "source": "Sleeper API /v1/players/nfl",

@@ -51,7 +51,7 @@ st.set_page_config(
     page_title="NFL Pro-Bot",
     page_icon="🏈",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",  # collapsed by default — mobile-first
 )
 
 # ------------------------------------------------------------------
@@ -153,6 +153,45 @@ st.markdown("""
         color: #7c8ba0;
         font-size: 14.5px;
     }
+
+    /* ── Touch targets: minimum 44px height on all buttons ─────── */
+    div.stButton > button {
+        min-height: 44px;
+    }
+
+    /* ── Keyboard focus rings ───────────────────────────────────── */
+    div.stButton > button:focus-visible {
+        outline: 2px solid #4f8ff0;
+        outline-offset: 2px;
+    }
+    input:focus-visible, select:focus-visible, textarea:focus-visible {
+        outline: 2px solid #4f8ff0;
+        outline-offset: 2px;
+    }
+
+    /* ── Tablet breakpoint (≤ 768px) ───────────────────────────── */
+    @media (max-width: 768px) {
+        .stApp { overflow-x: hidden; }
+
+        .hero { padding: 14px 16px; gap: 10px; }
+        .hero h1 { font-size: 18px; }
+
+        /* Cap all images so nothing causes horizontal overflow */
+        img { max-width: 48px !important; }
+
+        div[data-testid="stChatMessage"] { padding: 4px 4px; }
+
+        /* Timestamps slightly lighter on small screens — contrast ok at this size */
+        .msg-time { color: #6b7d93; }
+    }
+
+    /* ── Mobile breakpoint (≤ 480px) ───────────────────────────── */
+    @media (max-width: 480px) {
+        .hero { padding: 10px 12px; gap: 8px; }
+        .hero h1 { font-size: 16px; }
+        .hero p  { font-size: 12px; }
+        .empty-state { padding: 20px 12px 10px 12px; }
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -165,6 +204,101 @@ if "last_mentioned" not in st.session_state:
     st.session_state["last_mentioned"] = None
 if "profile" not in st.session_state:
     st.session_state["profile"] = _load_prefs()  # {"team": ..., "player": ...}
+if "terms_accepted" not in st.session_state:
+    st.session_state["terms_accepted"] = False
+if "onboarding_done" not in st.session_state:
+    st.session_state["onboarding_done"] = False
+
+# ------------------------------------------------------------------
+# Consent Gate — shown once per session before any interaction.
+# Keeps the UI blocked until the user explicitly accepts.
+# ------------------------------------------------------------------
+if not st.session_state["terms_accepted"]:
+    st.markdown("""
+    <div style="max-width:560px; margin:80px auto 0 auto; background:#131c28;
+                border:1px solid #26374d; border-radius:14px; padding:32px 36px;">
+        <div style="font-size:32px; text-align:center; margin-bottom:12px;">🏈</div>
+        <h2 style="text-align:center; color:#f4f6f8; margin:0 0 6px 0;
+                   font-size:20px;">Welcome to NFL Pro-Bot</h2>
+        <p style="text-align:center; color:#8ea0b5; font-size:13.5px;
+                  margin:0 0 24px 0;">
+            AI-powered NFL data — live scores, injuries, fantasy stats, and more.
+        </p>
+        <div style="background:#0d1420; border-radius:8px; padding:14px 16px;
+                    font-size:13px; color:#8ea0b5; margin-bottom:20px;
+                    line-height:1.6;">
+            <strong style="color:#c8d6e5;">Before you continue:</strong><br>
+            • Responses are AI-generated and may be inaccurate or delayed.<br>
+            • Do not use this App for sports betting or high-stakes fantasy decisions.<br>
+            • No personal data is collected. Chat history lives only in your browser session.<br>
+            • Data is sourced from ESPN, Sleeper, and public RSS feeds.
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Centre the buttons using columns
+    # REPO_URL is set in Streamlit secrets (or .env locally). If absent,
+    # the legal links just don't render — the disclaimer text still shows.
+    _repo = os.getenv("REPO_URL", "")
+    _tos_url  = f"{_repo}/blob/main/TERMS_OF_SERVICE.md"  if _repo else ""
+    _priv_url = f"{_repo}/blob/main/PRIVACY_POLICY.md"    if _repo else ""
+    _legal_links = (
+        f"By continuing you agree to the "
+        f"<a href='{_tos_url}' target='_blank' style='color:#4f8ff0;'>Terms of Service</a> and "
+        f"<a href='{_priv_url}' target='_blank' style='color:#4f8ff0;'>Privacy Policy</a>."
+        if _repo else
+        "By continuing you agree to the Terms of Service and Privacy Policy."
+    )
+
+    _, col, _ = st.columns([2, 3, 2])
+    with col:
+        # Task 7 — show API key error before the agree button so a
+        # misconfigured deployment is obvious before the user starts typing.
+        if not os.getenv("GEMINI_API_KEY"):
+            st.error(
+                "⚠️ **Gemini API key not configured.** "
+                "Add `GEMINI_API_KEY` to your `.env` file or Streamlit Secrets before using the app. "
+                "[Get a free key →](https://aistudio.google.com/app/apikey)"
+            )
+        st.markdown(
+            f"<p style='text-align:center; font-size:12.5px; color:#5c6b7e; margin-bottom:8px;'>"
+            f"{_legal_links}</p>",
+            unsafe_allow_html=True,
+        )
+        if st.button("✅ I agree — let's go", use_container_width=True, type="primary"):
+            st.session_state["terms_accepted"] = True
+            st.rerun()
+    st.stop()  # Render nothing else until accepted
+
+# ------------------------------------------------------------------
+# Task 8 — First-run onboarding panel (once per session only)
+# ------------------------------------------------------------------
+if not st.session_state["onboarding_done"]:
+    st.markdown("""
+    <div style="max-width:600px; margin:0 auto 18px auto; background:#1a2636;
+                border:1px solid #2f6fed; border-radius:12px; padding:20px 24px;">
+        <div style="font-size:15px; font-weight:600; color:#f4f6f8; margin-bottom:10px;">
+            👋 Here's what NFL Pro-Bot can do
+        </div>
+        <div style="font-size:13.5px; color:#8ea0b5; line-height:1.8;">
+            💬 <strong style="color:#c8d6e5;">Ask anything in the chat</strong> —
+            scores, standings, injuries, fantasy advice, player comparisons.<br>
+            📋 <strong style="color:#c8d6e5;">Use the sidebar</strong> (☰ top-left)
+            for one-click team briefings, fantasy tools, and waiver wire.<br>
+            ⭐ <strong style="color:#c8d6e5;">Set a favourite team</strong> in
+            "My Profile" for a personalised daily update with one tap.
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    _, btn_col, skip_col, _ = st.columns([2, 2, 1, 2])
+    with btn_col:
+        if st.button("✅ Got it — show me the app", use_container_width=True, type="primary"):
+            st.session_state["onboarding_done"] = True
+            st.rerun()
+    with skip_col:
+        if st.button("Skip", use_container_width=True):
+            st.session_state["onboarding_done"] = True
+            st.rerun()
 
 THINKING_MESSAGES = [
     "Checking the box score...",
@@ -259,7 +393,11 @@ with st.sidebar:
             pcol, tcol = st.columns([1, 3])
             with pcol:
                 if flog:
-                    st.image(flog, width=36)
+                    # Task 5 — alt text for accessibility
+                    st.markdown(
+                        f'<img src="{flog}" width="36" alt="{fav_team} logo" style="display:block;">',
+                        unsafe_allow_html=True,
+                    )
             with tcol:
                 st.markdown(f"**{fav_team}**")
         if fav_player:
@@ -317,7 +455,11 @@ with st.sidebar:
                                 placeholder="Choose a team")
     logo = team_logo_url(team_choice)
     if logo:
-        st.image(logo, width=64)
+        # Task 5 — alt text for accessibility
+        st.markdown(
+            f'<img src="{logo}" width="64" alt="{team_choice} logo" style="display:block; margin-bottom:6px;">',
+            unsafe_allow_html=True,
+        )
 
     # The one clear default action — everything else is one click away
     # inside the expanders below, not competing for attention up front.
@@ -378,6 +520,27 @@ with st.sidebar:
             )
 
     st.divider()
+    # Task 9 — Export Chat button
+    _has_msgs = len(st.session_state.messages) > 0
+    if _has_msgs:
+        _export_lines = []
+        for _m in st.session_state.messages:
+            _role = "You" if _m["role"] == "user" else "NFL Pro-Bot"
+            _ts   = _m.get("time", "")
+            _prefix = f"[{_ts}] {_role}:" if _ts else f"{_role}:"
+            _export_lines.append(f"{_prefix}\n{_m['content']}\n")
+        _export_str = "\n".join(_export_lines)
+        _export_name = f"nfl-probot-chat-{datetime.date.today()}.txt"
+        st.download_button(
+            label="📥 Export Chat",
+            data=_export_str,
+            file_name=_export_name,
+            mime="text/plain",
+            use_container_width=True,
+        )
+    else:
+        st.button("📥 Export Chat", disabled=True, use_container_width=True,
+                  help="Nothing to export yet — start a conversation first.")
     if st.button("🗑️ Clear Conversation", use_container_width=True):
         st.session_state.messages = []
         st.session_state["last_mentioned"] = None
@@ -392,6 +555,10 @@ st.markdown("""
     <div>
         <h1>NFL AI Assistant</h1>
         <p>Live scores, news, standings, and fantasy stats — just ask.</p>
+        <p style="font-size:11.5px; color:#5c6b7e; margin-top:3px;">
+            ⚠️ AI-generated — verify before acting. Not for betting.
+            Data: ESPN · Sleeper · RSS feeds.
+        </p>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -532,3 +699,28 @@ if final_query:
             st.markdown(response)
             st.markdown(f'<div class="msg-time">{reply_time}</div>', unsafe_allow_html=True)
             st.session_state.messages.append({"role": "assistant", "content": response, "time": reply_time})
+
+# ------------------------------------------------------------------
+# Footer — legal links, attribution, AI disclaimer
+# Always rendered below the chat, regardless of conversation state.
+# ------------------------------------------------------------------
+_repo     = os.getenv("REPO_URL", "")
+_tos_url  = f"{_repo}/blob/main/TERMS_OF_SERVICE.md" if _repo else "#"
+_priv_url = f"{_repo}/blob/main/PRIVACY_POLICY.md"   if _repo else "#"
+
+st.markdown("---")
+st.markdown(
+    f"""
+<div style="text-align:center; font-size:12px; color:#4a5568; padding:8px 0 16px 0; line-height:2;">
+    NFL Pro-Bot is an independent fan tool — not affiliated with the NFL, ESPN, or Sleeper.<br>
+    Responses are AI-generated and may be inaccurate. Not for use in sports betting.<br>
+    Data sourced from <strong>ESPN</strong> · <strong>Sleeper</strong> · <strong>Yahoo Sports</strong> · <strong>NBC Sports PFT</strong><br>
+    <a href="{_tos_url}" target="_blank" style="color:#4f8ff0; text-decoration:none;">Terms of Service</a>
+    &nbsp;·&nbsp;
+    <a href="{_priv_url}" target="_blank" style="color:#4f8ff0; text-decoration:none;">Privacy Policy</a>
+    &nbsp;·&nbsp;
+    <span style="color:#4a5568;">© 2026 NFL Pro-Bot</span>
+</div>
+""",
+    unsafe_allow_html=True,
+)
