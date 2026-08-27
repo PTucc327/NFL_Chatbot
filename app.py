@@ -10,6 +10,7 @@ Streamlit chrome.
 import os
 import re
 import json
+import html
 import time
 import random
 import datetime
@@ -672,10 +673,13 @@ if final_query:
                     p_id = p.get("player_id") or p.get("id")
                     with cols[idx]:
                         logo = team_logo_url(p.get("team", ""))
+                        safe_name = html.escape(str(p.get("full_name", "Unknown")))
+                        safe_team = html.escape(str(p.get("team") or "FA"))
+                        safe_pos  = html.escape(str(p.get("position", "")))
                         st.markdown(
                             f'<div class="player-card">'
-                            f'<div class="pname">{p["full_name"]}</div>'
-                            f'<div class="pmeta">{p.get("team", "FA")} · {p["position"]}</div>'
+                            f'<div class="pname">{safe_name}</div>'
+                            f'<div class="pmeta">{safe_team} · {safe_pos}</div>'
                             f'</div>',
                             unsafe_allow_html=True,
                         )

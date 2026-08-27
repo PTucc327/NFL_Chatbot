@@ -11,8 +11,8 @@ What it updates:
   data/prospects.json — top college prospects from ESPN draft rankings.
 
 Data sources:
-  - Sleeper /players/nfl  (free, no auth needed)
-  - ESPN draft API        (free, no auth needed)
+  - Sleeper /players/nfl  (free, no auth needed) — powers both rosters
+    and prospects (rookies ranked by Sleeper's search_rank)
 
 Usage:
   python scripts/update_data.py               # update everything
@@ -101,11 +101,11 @@ def _write_json(path: str, data: Any, dry_run: bool) -> None:
 
 # ── Roster updater ─────────────────────────────────────────────────
 
-def update_rosters(dry_run: bool = False) -> None:
+def update_rosters(raw: Dict[str, Dict], dry_run: bool = False) -> None:
     """
-    Pulls the full Sleeper player dump and builds data/rosters.json —
-    a dict keyed by team abbreviation, each containing a list of players
-    sorted by depth chart order within their position group.
+    Builds data/rosters.json — a dict keyed by team abbreviation, each
+    containing a list of players sorted by depth chart order within
+    their position group.
 
     Schema per player:
       { player_id, full_name, position, depth_chart_position,
@@ -114,12 +114,7 @@ def update_rosters(dry_run: bool = False) -> None:
     This lets api_client.py answer "who are the Chiefs receivers?" or
     "who is the backup QB for the Eagles?" without scanning the full
     4 MB Sleeper dump at query time.
-    """
-    log.info("Fetching Sleeper player dump …")
-    raw: Dict[str, Dict] = _fetch(SLEEPER_PLAYERS)
-    log.info(f"  {len(raw):,} total players in Sleeper dump")
-
-    # Group active skill-position players by team
+    """    # Group active skill-position players by team
     rosters: Dict[str, List[Dict]] = {}
 
     for pid, p in raw.items():
@@ -173,58 +168,54 @@ def update_rosters(dry_run: bool = False) -> None:
 
 # ── Prospects updater ──────────────────────────────────────────────
 
-def update_prospects(dry_run: bool = False) -> None:
+def update_prospects(raw: Dict[str, Dict], dry_run: bool = False) -> None:
     """
-    Pulls ESPN's draft prospect rankings and writes data/prospects.json.
+    Builds data/prospects.json from the Sleeper player dump — rookies
+    (years_exp == 0) in fantasy-relevant skill positions, ranked by
+    Sleeper's search_rank (lower = more notable/searched; 9999999 means
+    unranked, which we exclude).
 
-    Schema per prospect (matches existing format so api_client.py needs
-    no changes):
+    NOTE: this replaces a previous version that called ESPN's now-retired
+    draft-prospects endpoint via an `ESPN_DRAFT_API` constant that had
+    already been deleted from this file — every run since that refactor
+    crashed with a NameError and silently fell through to "keep the
+    existing file", so prospects.json has not actually updated in months.
+
+    Schema per prospect (matches the existing hand-curated format so
+    api_client.py needs no changes):
       { name, school, pos, stats, outlook }
     """
-    log.info("Fetching ESPN draft prospects …")
-    try:
-        data = _fetch(ESPN_DRAFT_API, params={"limit": 50})
-    except RuntimeError as e:
-        log.error(f"ESPN draft API unavailable: {e}")
-        log.warning("Keeping existing prospects.json unchanged.")
-        return
-
-    athletes = data.get("athletes", [])
-    if not athletes:
-        log.warning("ESPN returned no prospects — keeping existing file.")
-        return
-
-    prospects = []
-    for a in athletes:
-        bio   = a.get("athlete", a)          # ESPN nests differently sometimes
-        name  = bio.get("displayName") or bio.get("fullName", "Unknown")
-        pos   = bio.get("position", {}).get("abbreviation", "?")
-        school_data = bio.get("college") or bio.get("team") or {}
-        school = school_data.get("displayName") or school_data.get("name", "Unknown")
-
-        # Build a stats summary from ESPN's measurables if present
-        stats_parts = []
-        for stat in bio.get("statistics", [])[:4]:
-            label = stat.get("displayName", stat.get("name", ""))
-            val   = stat.get("displayValue", "")
-            if label and val:
-                stats_parts.append(f"{label}: {val}")
-
-        # Draft projection
-        projection = a.get("draftProjection") or bio.get("draftProjection") or ""
-        rank        = a.get("rank", a.get("ranking", ""))
-        outlook     = projection or (f"#{rank} overall prospect" if rank else "Top NFL Draft Prospect")
-
-        prospects.append({
-            "name":    name,
-            "school":  school,
+    rookies = []
+    for pid, p in raw.items():
+        if not p.get("active"):
+            continue
+        if p.get("years_exp") != 0:
+            continue
+        pos = p.get("position") or ""
+        if pos not in SKILL_POSITIONS:
+            continue
+        rank = p.get("search_rank")
+        if rank is None or rank >= _SLEEPER_PROSPECT_RANK_CUTOFF:
+            continue
+        rookies.append({
+            "name":    p.get("full_name", ""),
+            "school":  p.get("college") or "Unknown",
             "pos":     pos,
-            "stats":   "; ".join(stats_parts) if stats_parts else "See ESPN for full stats",
-            "outlook": outlook,
+            "stats":   "See player profile for current-season stats",
+            "outlook": f"NFL rookie — Sleeper search rank #{rank}",
+            "_rank":   rank,  # sort key only, stripped before writing
         })
 
-    log.info(f"  {len(prospects)} prospects fetched from ESPN")
-    _write_json(PROSPECTS_PATH, prospects, dry_run)
+    if not rookies:
+        log.warning("No rookies matched the prospect criteria — keeping existing file.")
+        return
+
+    rookies.sort(key=lambda r: r["_rank"])
+    for r in rookies:
+        del r["_rank"]
+
+    log.info(f"  {len(rookies)} notable rookies derived from Sleeper dump")
+    _write_json(PROSPECTS_PATH, rookies, dry_run)
 
 
 # ── Main ───────────────────────────────────────────────────────────
@@ -247,15 +238,27 @@ def main() -> None:
     log.info(f"NFL data update started  {'[DRY RUN]' if args.dry_run else ''}")
     log.info("=" * 60)
 
-    if run_rosters:
+    # Both updaters read from the same Sleeper dump — fetch it once here
+    # instead of each function hitting the ~4MB endpoint independently
+    # (the default "update everything" mode used to do exactly that).
+    raw_players = None
+    if run_rosters or run_prospects:
         try:
-            update_rosters(dry_run=args.dry_run)
+            log.info("Fetching Sleeper player dump …")
+            raw_players = _fetch(SLEEPER_PLAYERS)
+            log.info(f"  {len(raw_players):,} total players in Sleeper dump")
+        except RuntimeError as e:
+            log.error(f"Could not fetch Sleeper player dump: {e}")
+
+    if run_rosters and raw_players is not None:
+        try:
+            update_rosters(raw_players, dry_run=args.dry_run)
         except Exception as e:
             log.error(f"Roster update failed: {e}")
 
-    if run_prospects:
+    if run_prospects and raw_players is not None:
         try:
-            update_prospects(dry_run=args.dry_run)
+            update_prospects(raw_players, dry_run=args.dry_run)
         except Exception as e:
             log.error(f"Prospects update failed: {e}")
 
