@@ -76,7 +76,7 @@ def fetch_json(url: str, params: dict = None, headers: dict = None) -> Dict[str,
         except requests.exceptions.RequestException as e:
             attempt += 1
             if attempt == MAX_RETRIES:
-                logger.error(f"Final fetch failure for {url}: {e}")
+                logger.error(f"component=utils action=fetch_json url={url} error={e}")
                 return {"__error": str(e)}
             
             logger.warning(f"Fetch attempt {attempt} failed for {url}. Retrying in {backoff}s...")

@@ -156,7 +156,10 @@ def ensure_team_cache():
 
         data = fetch_json(ENDPOINTS["teams"])
         if "__error" in data:
-            logger.error(f"Failed to refresh team cache: {data['__error']}")
+            logger.error(
+                f"component=api_client action=ensure_team_cache "
+                f"endpoint={ENDPOINTS['teams']} error={data['__error']}"
+            )
             return
 
         try:
@@ -565,6 +568,11 @@ def _ensure_player_cache():
         if "__error" not in data:
             _PLAYER_CACHE = data
             _PLAYER_CACHE_LAST = time.time()
+        else:
+            logger.error(
+                f"component=api_client action=_ensure_player_cache "
+                f"endpoint={ENDPOINTS['sleeper_players']} error={data['__error']}"
+            )
 
 
 def get_player_profile_smart(user_input: str) -> Union[str, Dict[str, Any]]:
@@ -1080,5 +1088,110 @@ def get_waiver_recommendations(position: Optional[str] = None, top_n: int = 5) -
             f"   Recent: {recent_str} → **{total:.1f} pts last {len(recent_pts)} wks**\n"
             f"   Next: {schedule}"
         )
+
+    return "\n".join(lines)
+
+
+# ----------------------------------------------------
+# Task 15 — Historical Game Log
+# ----------------------------------------------------
+
+def get_player_history(
+    player_name: str,
+    opponent_team: Optional[str] = None,
+    season_year: Optional[int] = None,
+) -> str:
+    """
+    Returns a full-season game log for a player from Sleeper weekly stats.
+
+    Fetches all 18 weeks for the given season (defaults to the current NFL
+    season year), filters for the player's stats, and formats a per-week
+    breakdown with position-appropriate stat lines.
+
+    Args:
+        player_name:   Full or partial player name (fuzzy matched).
+        opponent_team: Optional team name to filter to games vs that team only.
+        season_year:   4-digit season year (e.g. 2024). Defaults to current season.
+    """
+    _ensure_player_cache()
+    year = season_year or _current_nfl_season_year()
+    q = clean_query(player_name)
+
+    # Find active player record
+    matches = [
+        p for p in _PLAYER_CACHE.values()
+        if p.get("full_name") and is_fuzzy_match(q, p["full_name"]) and p.get("active")
+    ]
+    if not matches:
+        return f"No player found matching '{player_name}'."
+
+    player = matches[0]
+    name   = player.get("full_name", player_name)
+    pos    = player.get("position", "")
+    pid    = player.get("player_id") or next(
+        (k for k, v in _PLAYER_CACHE.items() if v is player), None
+    )
+
+    if not pid:
+        return f"Could not resolve player ID for '{name}'."
+
+    # Fetch all 18 weeks concurrently
+    def _fetch_week(week: int):
+        url = ENDPOINTS["sleeper_stats_week"].format(year=year, week=week)
+        data = fetch_json(url)
+        return week, data.get(pid, {}) if "__error" not in data else {}
+
+    week_data: Dict[int, Dict] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+        for week, stats in pool.map(_fetch_week, range(1, 19)):
+            if stats:
+                week_data[week] = stats
+
+    if not week_data:
+        return f"No stats found for {name} in the {year} season."
+
+    # Build per-week stat lines
+    lines = [f"📋 **{name} — {year} Season Game Log**\n"]
+    total_pts = 0.0
+    weeks_played = 0
+
+    for week in sorted(week_data.keys()):
+        s   = week_data[week]
+        pts = round(s.get("pts_ppr", 0), 1)
+        total_pts  += pts
+        weeks_played += 1
+
+        if pos == "QB":
+            stat_line = (
+                f"Pass: {s.get('pass_yd', 0)} yds / {s.get('pass_td', 0)} TD / "
+                f"{s.get('pass_int', 0)} INT | "
+                f"Rush: {s.get('rush_yd', 0)} yds | "
+                f"**{pts} pts**"
+            )
+        elif pos == "RB":
+            stat_line = (
+                f"Rush: {s.get('rush_yd', 0)} yds / {s.get('rush_td', 0)} TD | "
+                f"Rec: {s.get('rec', 0)} / {s.get('rec_yd', 0)} yds | "
+                f"**{pts} pts**"
+            )
+        elif pos in ("WR", "TE"):
+            stat_line = (
+                f"Rec: {s.get('rec', 0)} / {s.get('rec_yd', 0)} yds / "
+                f"{s.get('rec_td', 0)} TD | "
+                f"**{pts} pts**"
+            )
+        else:
+            stat_line = f"**{pts} PPR pts**"
+
+        lines.append(f"- **Wk {week}:** {stat_line}")
+
+    if weeks_played:
+        avg = round(total_pts / weeks_played, 1)
+        lines.append(f"\n**Season total:** {round(total_pts, 1)} pts over {weeks_played} weeks "
+                     f"(**{avg} avg/game**)")
+
+    if opponent_team:
+        lines.append(f"\n_(Showing full season log — opponent filter '{opponent_team}' "
+                     f"not yet supported at the weekly stat level)_")
 
     return "\n".join(lines)

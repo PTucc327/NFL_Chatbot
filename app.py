@@ -394,9 +394,11 @@ with st.sidebar:
             pcol, tcol = st.columns([1, 3])
             with pcol:
                 if flog:
-                    # Task 5 — alt text for accessibility
+                    # Task 5 — alt text for accessibility; html.escape guards
+                    # fav_team (user-controlled) injected into HTML attribute.
+                    _safe_team_name = html.escape(fav_team)
                     st.markdown(
-                        f'<img src="{flog}" width="36" alt="{fav_team} logo" style="display:block;">',
+                        f'<img src="{flog}" width="36" alt="{_safe_team_name} logo" style="display:block;">',
                         unsafe_allow_html=True,
                     )
             with tcol:
@@ -456,9 +458,11 @@ with st.sidebar:
                                 placeholder="Choose a team")
     logo = team_logo_url(team_choice)
     if logo:
-        # Task 5 — alt text for accessibility
+        # Task 5 — alt text for accessibility; html.escape guards
+        # team_choice (from selectbox, but validate defensively).
+        _safe_choice = html.escape(team_choice)
         st.markdown(
-            f'<img src="{logo}" width="64" alt="{team_choice} logo" style="display:block; margin-bottom:6px;">',
+            f'<img src="{logo}" width="64" alt="{_safe_choice} logo" style="display:block; margin-bottom:6px;">',
             unsafe_allow_html=True,
         )
 
@@ -644,6 +648,13 @@ if final_query:
                 full_response = st.write_stream(
                     _typewriter(itertools.chain([first_chunk], response))
                 )
+                # Task 14 — render weekly PPR sparkline if player/fantasy response
+                # includes chart data (set in session_state by chatbot.py)
+                _chart = st.session_state.pop("_pending_chart_data", None)
+                if _chart and len(_chart.get("pts", [])) >= 4:
+                    import pandas as pd
+                    _df = pd.DataFrame({"PPR Points": _chart["pts"]}, index=_chart["weeks"])
+                    st.line_chart(_df)
                 st.markdown(f'<div class="msg-time">{reply_time}</div>', unsafe_allow_html=True)
                 st.session_state.messages.append({"role": "assistant", "content": full_response, "time": reply_time})
 
@@ -668,31 +679,34 @@ if final_query:
                 st.write(disambiguation_msg)
                 st.session_state.messages.append({"role": "assistant", "content": disambiguation_msg, "time": reply_time})
 
-                cols = st.columns(len(player_list))
+                # Task 3 — vertical stack (no columns) so cards render on all viewports
                 for idx, p in enumerate(player_list):
                     p_id = p.get("player_id") or p.get("id")
-                    with cols[idx]:
-                        logo = team_logo_url(p.get("team", ""))
-                        safe_name = html.escape(str(p.get("full_name", "Unknown")))
-                        safe_team = html.escape(str(p.get("team") or "FA"))
-                        safe_pos  = html.escape(str(p.get("position", "")))
+                    logo = team_logo_url(p.get("team", ""))
+                    safe_name = html.escape(str(p.get("full_name", "Unknown")))
+                    safe_team = html.escape(str(p.get("team") or "FA"))
+                    safe_pos  = html.escape(str(p.get("position", "")))
+                    st.markdown(
+                        f'<div class="player-card">'
+                        f'<div class="pname">{safe_name}</div>'
+                        f'<div class="pmeta">{safe_team} · {safe_pos}</div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+                    if logo:
+                        # Task 5 — alt text for accessibility
                         st.markdown(
-                            f'<div class="player-card">'
-                            f'<div class="pname">{safe_name}</div>'
-                            f'<div class="pmeta">{safe_team} · {safe_pos}</div>'
-                            f'</div>',
+                            f'<img src="{logo}" width="40" alt="{safe_team} logo" style="display:block; margin-bottom:4px;">',
                             unsafe_allow_html=True,
                         )
-                        if logo:
-                            st.image(logo, width=40)
-                        if st.button("Select", key=f"sel_{p_id}", use_container_width=True):
-                            st.session_state["last_mentioned"] = p["full_name"]
-                            st.session_state.messages.append({
-                                "role": "user",
-                                "content": f"Show me the profile for {p['full_name']} on the {p.get('team')}",
-                                "time": datetime.datetime.now().strftime("%I:%M %p"),
-                            })
-                            st.rerun()
+                    if st.button("Select", key=f"sel_{p_id}", use_container_width=True):
+                        st.session_state["last_mentioned"] = p["full_name"]
+                        st.session_state.messages.append({
+                            "role": "user",
+                            "content": f"Show me the profile for {p['full_name']} on the {p.get('team')}",
+                            "time": datetime.datetime.now().strftime("%I:%M %p"),
+                        })
+                        st.rerun()
             else:
                 fallback_msg = "I found multiple matches but had trouble loading the details. Try adding the team name to your search!"
                 st.warning(fallback_msg)

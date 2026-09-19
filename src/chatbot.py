@@ -42,6 +42,7 @@ from src.api_client import (
     get_waiver_recommendations,
     get_game_odds,
     get_team_roster,
+    get_player_history,
     detect_team_from_query,
 )
 
@@ -91,9 +92,14 @@ def _check_rate_limit() -> Optional[str]:
         rl["window_count"] = 0
 
     if rl["window_count"] >= _RATE_LIMIT_MAX_PER_WINDOW:
-        wait = max(1, int(_RATE_LIMIT_WINDOW_SECONDS - (now - rl["window_start"])))
-        st.session_state["rate_limit"] = rl
-        return f"⚠️ You're sending messages a bit fast — please wait ~{wait}s and try again."
+        wait = int(_RATE_LIMIT_WINDOW_SECONDS - (now - rl["window_start"]))
+        if wait <= 0:
+            # Window has actually expired — reset and allow
+            rl["window_start"] = now
+            rl["window_count"] = 0
+        else:
+            st.session_state["rate_limit"] = rl
+            return f"⚠️ You're sending messages a bit fast — please wait ~{wait}s and try again."
 
     rl["window_count"]  += 1
     rl["session_count"] += 1
@@ -168,6 +174,7 @@ Schema:
   "team": "team name as a string, or null",
   "player": "player full name as a string, or null",
   "player_b": "second player full name for comparisons or trades, or null",
+  "season": "4-digit season year as integer, or null (e.g. 2024 for 'last year')",
   "raw_query": "the original user query unchanged"
 }
 
@@ -187,6 +194,8 @@ Allowed intents (pick ALL that apply — multi-intent is supported):
   waiver      — waiver wire pickup recommendations, optionally filtered by position
   odds        — betting lines, spread, over/under
   roster      — team depth chart, "who is the backup QB", "list the receivers"
+  history     — past performance, "last year", "career stats vs", "how did X do against Y",
+                "game log", "stats over the season"
   general     — anything else NFL-related
 
 Rules:
@@ -206,6 +215,8 @@ Rules:
 - If the query mentions roster, depth chart, backup, who starts, who plays → use "roster" intent.
   - If a position is mentioned (QB, RB, WR, TE, etc.) alongside the roster question,
     set "player" to that position string (e.g. "WR").
+- For history intent: extract the season year into "season" when the user says "last year",
+  "in 2024", "during the 2023 season", etc. If no year is mentioned, set "season" to null.
 - If the query is ambiguous, pick the most likely intent.
 - Use "news" when a specific team is named or implied. Use "league_news"
   when the question is about the NFL broadly — no specific team, phrases
@@ -235,14 +246,14 @@ def _extract_intent(user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
     if raw.startswith("__"):
         team = detect_team_from_query(user_input)
         return {"intents": ["general"], "team": team, "player": None,
-                "player_b": None, "raw_query": user_input, "__error": raw}
+                "player_b": None, "season": None, "raw_query": user_input, "__error": raw}
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
         logger.warning(f"Gemini returned non-JSON: {raw[:200]}")
         team = detect_team_from_query(user_input)
         return {"intents": ["general"], "team": team, "player": None,
-                "player_b": None, "raw_query": user_input}
+                "player_b": None, "season": None, "raw_query": user_input}
 
 
 # -------------------------------------------------------
@@ -250,7 +261,8 @@ def _extract_intent(user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
 # -------------------------------------------------------
 
 def _fetch_one(intent: str, team: Optional[str], player: Optional[str],
-               player_b: Optional[str], raw_query: str) -> tuple[str, Any]:
+               player_b: Optional[str], raw_query: str,
+               season: Optional[int] = None) -> tuple[str, Any]:
     """Fetch data for a single intent. Runs in a thread pool."""
     try:
         if intent == "scores":
@@ -273,7 +285,14 @@ def _fetch_one(intent: str, team: Optional[str], player: Optional[str],
 
         elif intent == "player":
             name = player or team
-            return intent, get_player_profile_smart(name) if name else "Which player?"
+            if not name:
+                return intent, "Which player?"
+            profile = get_player_profile_smart(name)
+            # Task 14 — attach chart_data so app.py can render a points trend
+            if isinstance(profile, str):
+                chart = _build_chart_data(name)
+                return intent, {"_text": profile, "chart_data": chart} if chart else profile
+            return intent, profile
 
         elif intent == "injury":
             name = player or team
@@ -285,8 +304,14 @@ def _fetch_one(intent: str, team: Optional[str], player: Optional[str],
                 return intent, "Which player do you want fantasy info for?"
             sit_start_kw = {"start", "sit", "bench", "lineup", "waiver", "should i"}
             if any(kw in raw_query.lower() for kw in sit_start_kw):
-                return intent, get_fantasy_sit_start(name, team)
-            return intent, get_fantasy_player_stats(name)
+                result = get_fantasy_sit_start(name, team)
+            else:
+                result = get_fantasy_player_stats(name)
+            # Task 14 — attach chart_data for fantasy responses too
+            chart = _build_chart_data(name)
+            if chart and isinstance(result, str):
+                return intent, {"_text": result, "chart_data": chart}
+            return intent, result
 
         elif intent == "comparison":
             # #3 — player comparison
@@ -319,12 +344,73 @@ def _fetch_one(intent: str, team: Optional[str], player: Optional[str],
             pos = player if player and player.upper() in VALID_POSITIONS else None
             return intent, get_team_roster(team, position=pos)
 
+        elif intent == "history":
+            # Task 15 — historical game log
+            name = player
+            if not name:
+                return intent, "Which player's game history would you like to see?"
+            return intent, get_player_history(name, opponent_team=team, season_year=season)
+
         else:
             return intent, None  # general — Gemini answers from knowledge
 
     except Exception as e:
         logger.error(f"Dispatch error for intent '{intent}': {e}")
         return intent, f"I ran into a problem fetching {intent} data."
+
+
+def _build_chart_data(player_name: str) -> Optional[Dict[str, Any]]:
+    """
+    Builds weekly PPR points data for a sparkline chart.
+    Returns {"weeks": [...], "pts": [...]} if ≥4 weeks of data exist, else None.
+    Called from _fetch_one for player/fantasy intents (Task 14).
+    """
+    try:
+        from src.api_client import _PLAYER_CACHE, _ensure_player_cache, ENDPOINTS, _current_nfl_season_year
+        from src.utils import fetch_json, is_fuzzy_match, clean_query
+        import concurrent.futures as _cf
+        import datetime as _dt
+
+        _ensure_player_cache()
+        q = clean_query(player_name)
+        matches = [
+            (pid, p) for pid, p in _PLAYER_CACHE.items()
+            if p.get("full_name") and is_fuzzy_match(q, p["full_name"]) and p.get("active")
+        ]
+        if not matches:
+            return None
+
+        pid = matches[0][0]
+        year = _current_nfl_season_year()
+
+        today = _dt.datetime.now()
+        season_start = _dt.datetime(today.year if today.month >= 9 else today.year - 1, 9, 1)
+        current_week = min(max(1, int((today - season_start).days // 7) + 1), 18)
+        weeks_to_fetch = list(range(1, current_week + 1))
+
+        def _fetch_week(week: int):
+            url = ENDPOINTS["sleeper_stats_week"].format(year=year, week=week)
+            data = fetch_json(url)
+            return week, data.get(pid, {}) if "__error" not in data else {}
+
+        week_pts = {}
+        with _cf.ThreadPoolExecutor(max_workers=5) as pool:
+            for week, stats in pool.map(_fetch_week, weeks_to_fetch):
+                pts = stats.get("pts_ppr")
+                if pts is not None:
+                    week_pts[week] = round(pts, 1)
+
+        if len(week_pts) < 4:
+            return None
+
+        sorted_weeks = sorted(week_pts.keys())
+        return {
+            "weeks": [f"Wk {w}" for w in sorted_weeks],
+            "pts": [week_pts[w] for w in sorted_weeks],
+        }
+    except Exception as e:
+        logger.warning(f"chart_data build failed for {player_name}: {e}")
+        return None
 
 
 def _dispatch(parsed: Dict[str, Any]) -> Dict[str, Any]:
@@ -337,12 +423,13 @@ def _dispatch(parsed: Dict[str, Any]) -> Dict[str, Any]:
     team     = parsed.get("team")
     player   = parsed.get("player")
     player_b = parsed.get("player_b")
+    season   = parsed.get("season")
     raw      = parsed.get("raw_query", "")
 
     results: Dict[str, Any] = {}
     with ThreadPoolExecutor(max_workers=min(len(intents), 5)) as pool:
         futures = {
-            pool.submit(_fetch_one, intent, team, player, player_b, raw): intent
+            pool.submit(_fetch_one, intent, team, player, player_b, raw, season): intent
             for intent in intents
         }
         for future in as_completed(futures):
@@ -403,6 +490,9 @@ def _build_format_prompt(user_input: str, data_results: Dict[str, Any],
     data_str = ""
     for intent, data in data_results.items():
         if isinstance(data, dict):
+            # Task 14 — unwrap player/fantasy results that carry chart_data
+            if "_text" in data:
+                data_str += f"\n[{intent.upper()} DATA]\n{data['_text']}\n"
             continue
         if data:
             data_str += f"\n[{intent.upper()} DATA]\n{data}\n"
@@ -419,8 +509,13 @@ def stream_response(user_input: str, data_results: Dict[str, Any],
                     conversation_history: list,
                     conv_state: Dict[str, Any]) -> Generator[str, None, None]:
     """Yields streaming tokens from Gemini for app.py to pass to st.write_stream()."""
-    non_dict = {k: v for k, v in data_results.items() if not isinstance(v, dict)}
-    if not non_dict:
+    # Filter out plain disambiguation dicts — those that carry _text (chart_data
+    # wrappers from Task 14) are real data and should go through to Gemini.
+    non_disambig = {
+        k: v for k, v in data_results.items()
+        if not isinstance(v, dict) or "_text" in v
+    }
+    if not non_disambig:
         return  # disambiguation only — app.py handles it
 
     prompt = _build_format_prompt(user_input, data_results, conversation_history, conv_state)
@@ -514,6 +609,16 @@ def nfl_chatbot_with_context(user_input: str) -> Union[str, Dict[str, Any], Gene
     # Step 4 — update conversation state (#7)
     new_conv_state = _update_conv_state(parsed, context.get("conv_state", {}))
     st.session_state["conv_state"] = new_conv_state
+
+    # Task 14 — surface chart_data to app.py via session_state so the
+    # function signature stays unchanged.  app.py reads and clears it
+    # after st.write_stream completes.
+    chart_data = None
+    for result in data_results.values():
+        if isinstance(result, dict) and "chart_data" in result:
+            chart_data = result["chart_data"]
+            break
+    st.session_state["_pending_chart_data"] = chart_data
 
     # Step 5 — stream
     generator = stream_response(
