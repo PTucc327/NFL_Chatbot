@@ -19,19 +19,24 @@ import streamlit as st
 from dotenv import load_dotenv
 from streamlit_mic_recorder import speech_to_text
 
-from src.chatbot import nfl_chatbot_with_context
+from src.chatbot import nfl_chatbot_with_context, ChatbotResponse
 
 load_dotenv()
 
 # ------------------------------------------------------------------
 # Local profile persistence — favorite team/player survive app
-# restarts, not just the current browser session. Deliberately simple
-# (a small JSON file next to the user's home dir) since this is a
-# single-user local app, not something needing a real database.
+# restarts (local only). On Streamlit Cloud the container filesystem is
+# ephemeral AND shared, so writing to ~ would collide across users and
+# the file would vanish on every redeploy. We detect cloud via the
+# STREAMLIT_SHARING_MODE env var (set automatically by Streamlit Cloud)
+# and fall back to session-only state there.
 # ------------------------------------------------------------------
+_IS_CLOUD = bool(os.getenv("STREAMLIT_SHARING_MODE") or os.getenv("IS_STREAMLIT_CLOUD"))
 _PREFS_PATH = os.path.join(os.path.expanduser("~"), ".nfl_chatbot_prefs.json")
 
 def _load_prefs() -> dict:
+    if _IS_CLOUD:
+        return {}  # no shared filesystem on cloud — use session state only
     try:
         with open(_PREFS_PATH, "r") as f:
             return json.load(f)
@@ -39,11 +44,29 @@ def _load_prefs() -> dict:
         return {}
 
 def _save_prefs(prefs: dict) -> None:
+    if _IS_CLOUD:
+        return  # silently skip — profile lives in session_state only on cloud
     try:
         with open(_PREFS_PATH, "w") as f:
             json.dump(prefs, f)
     except Exception:
         pass  # non-fatal — profile just won't persist across restarts
+
+# ------------------------------------------------------------------
+# Input Sanitization — applied to all free-text player name fields.
+# Strips whitespace, enforces a length cap, and removes characters that
+# have no place in a player name. This prevents blank/whitespace-only
+# inputs from triggering API calls and limits the blast radius of any
+# unexpected input reaching Gemini prompts.
+# ------------------------------------------------------------------
+_PLAYER_INPUT_MAX = 80  # chars — long enough for any real player name
+
+def _sanitize_player(raw: str) -> str:
+    """Return a cleaned player name, or empty string if input is invalid."""
+    cleaned = raw.strip()[:_PLAYER_INPUT_MAX]
+    # Allow letters, spaces, hyphens, apostrophes, and periods (e.g. "D.K. Metcalf")
+    cleaned = re.sub(r"[^A-Za-z\s\-'.]", "", cleaned).strip()
+    return cleaned
 
 # ------------------------------------------------------------------
 # Page Configuration
@@ -434,7 +457,7 @@ with st.sidebar:
             if st.button("Save", key="save_profile_edit", use_container_width=True):
                 st.session_state["profile"] = {
                     "team": None if new_team == "(none)" else new_team,
-                    "player": new_player.strip() or None,
+                    "player": _sanitize_player(new_player) or None,
                 }
                 _save_prefs(st.session_state["profile"])
                 st.rerun()
@@ -446,7 +469,7 @@ with st.sidebar:
         if st.button("Save Profile", use_container_width=True):
             st.session_state["profile"] = {
                 "team": None if new_team == "(none)" else new_team,
-                "player": new_player.strip() or None,
+                "player": _sanitize_player(new_player) or None,
             }
             _save_prefs(st.session_state["profile"])
             st.rerun()
@@ -499,9 +522,9 @@ with st.sidebar:
                                 placeholder="Player name, e.g. CeeDee Lamb")
         fc1, fc2 = st.columns(2)
         if fc1.button("💰 Fantasy", use_container_width=True) and p_name:
-            sidebar_prompt = f"Can you give me a fantasy breakdown for {p_name}?"
+            sidebar_prompt = f"Can you give me a fantasy breakdown for {_sanitize_player(p_name)}?" if _sanitize_player(p_name) else None
         if fc2.button("🏥 Injury", use_container_width=True) and p_name:
-            sidebar_prompt = f"What is the injury status for {p_name}?"
+            sidebar_prompt = f"What is the injury status for {_sanitize_player(p_name)}?" if _sanitize_player(p_name) else None
 
         st.caption("COMPARE & TRADE")
         p1 = st.text_input("Player 1", label_visibility="collapsed",
@@ -510,9 +533,13 @@ with st.sidebar:
                             placeholder="Player 2", key="cmp_p2")
         cc1, cc2 = st.columns(2)
         if cc1.button("⚔️ Compare", use_container_width=True) and p1 and p2:
-            sidebar_prompt = f"Compare {p1} vs {p2}"
+            _sp1, _sp2 = _sanitize_player(p1), _sanitize_player(p2)
+            if _sp1 and _sp2:
+                sidebar_prompt = f"Compare {_sp1} vs {_sp2}"
         if cc2.button("🔄 Trade", use_container_width=True) and p1 and p2:
-            sidebar_prompt = f"Should I trade {p1} for {p2}?"
+            _sp1, _sp2 = _sanitize_player(p1), _sanitize_player(p2)
+            if _sp1 and _sp2:
+                sidebar_prompt = f"Should I trade {_sp1} for {_sp2}?"
 
         st.caption("WAIVER WIRE")
         waiver_pos = st.selectbox("Position", ["Any", "QB", "RB", "WR", "TE"],
@@ -603,6 +630,12 @@ user_input = st.chat_input("Ex: 'How did the Giants do today?' or 'Tell me about
 
 final_query = sidebar_prompt or example_prompt or voice_input or user_input
 
+# Enforce a hard input cap — prevents runaway Gemini token costs and prompt
+# injection via extremely long pasted text. 500 chars is well above any
+# natural NFL question; anything longer is either a paste error or abuse.
+if final_query:
+    final_query = final_query.strip()[:500]
+
 if final_query:
     now = datetime.datetime.now().strftime("%I:%M %p")
     st.session_state.messages.append({"role": "user", "content": final_query, "time": now})
@@ -622,9 +655,9 @@ if final_query:
         reply_time = datetime.datetime.now().strftime("%I:%M %p")
 
         # --- Streaming text response (the normal case) ---
-        if hasattr(response, "__iter__") and not isinstance(response, (str, dict, list)):
+        if isinstance(response, ChatbotResponse):
             try:
-                first_chunk = next(response)
+                first_chunk = next(response.stream)
             except StopIteration:
                 first_chunk = ""
 
@@ -646,14 +679,12 @@ if final_query:
 
             else:
                 full_response = st.write_stream(
-                    _typewriter(itertools.chain([first_chunk], response))
+                    _typewriter(itertools.chain([first_chunk], response.stream))
                 )
-                # Task 14 — render weekly PPR sparkline if player/fantasy response
-                # includes chart data (set in session_state by chatbot.py)
-                _chart = st.session_state.pop("_pending_chart_data", None)
-                if _chart and len(_chart.get("pts", [])) >= 4:
+                # Render weekly PPR sparkline if chart data was returned.
+                if response.chart_data and len(response.chart_data.get("pts", [])) >= 4:
                     import pandas as pd
-                    _df = pd.DataFrame({"PPR Points": _chart["pts"]}, index=_chart["weeks"])
+                    _df = pd.DataFrame({"PPR Points": response.chart_data["pts"]}, index=response.chart_data["weeks"])
                     st.line_chart(_df)
                 st.markdown(f'<div class="msg-time">{reply_time}</div>', unsafe_allow_html=True)
                 st.session_state.messages.append({"role": "assistant", "content": full_response, "time": reply_time})

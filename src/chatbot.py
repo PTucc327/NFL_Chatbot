@@ -17,8 +17,11 @@ Uses the google.genai SDK (v2+).
 import json
 import logging
 import os
+import threading
 import time
-from typing import Optional, Union, Dict, Any, Generator
+from dataclasses import dataclass, field
+from collections.abc import Set as AbstractSet
+from typing import Optional, Union, Dict, Any, Generator, Protocol
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import streamlit as st
@@ -43,6 +46,7 @@ from src.api_client import (
     get_game_odds,
     get_team_roster,
     get_player_history,
+    get_player_chart_data,
     detect_team_from_query,
 )
 
@@ -54,10 +58,70 @@ GEMINI_MODEL = "gemini-2.5-flash"
 # for roster/waiver queries filtered by position.
 VALID_POSITIONS = {"QB", "RB", "WR", "TE", "K", "DE", "DT", "LB", "CB", "S"}
 
+# Subset of VALID_POSITIONS that are relevant for fantasy waiver filtering.
+_WAIVER_POSITIONS = {"QB", "RB", "WR", "TE"}
+
+# Keywords that indicate a sit/start question rather than a raw stats lookup.
+_SIT_START_KEYWORDS = frozenset({"start", "sit", "bench", "lineup", "waiver", "should i"})
+
+# Number of recent conversation turns sent to the response formatter and the
+# maximum characters per turn to include (prevents prompt bloat).
+_HISTORY_TURNS = 6
+_HISTORY_MAX_CHARS = 300
+
+
+class IntentHandler(Protocol):
+    """
+    Structural type for all entries in _INTENT_DISPATCH.
+    Every handler (lambda or named function) must be callable with this signature.
+    Having an explicit protocol makes the contract visible and lets type checkers
+    catch mismatched handlers before they cause a runtime error in _fetch_one.
+    """
+    def __call__(
+        self,
+        team: Optional[str],
+        player: Optional[str],
+        player_b: Optional[str],
+        raw_query: str,
+        season: Optional[int],
+    ) -> Any: ...
+
+
+@dataclass
+class ChatbotResponse:
+    """
+    Wraps a streaming response from nfl_chatbot_with_context.
+    Carries the token generator and any supplemental chart data together
+    so app.py doesn't need a side-channel through st.session_state.
+    """
+    stream: Generator
+    chart_data: Optional[Dict[str, Any]] = field(default=None)
+
 
 # -------------------------------------------------------
-# Gemini Client
+# Gemini Client  (module-level singleton, thread-safe)
 # -------------------------------------------------------
+# Storing a genai.Client in st.session_state works for single-user local
+# runs but creates a pickling risk if Streamlit ever serializes session
+# state (e.g., with a future state backend).  A module-level singleton
+# guarded by a Lock is safer and consistent with the caching pattern used
+# in api_client.py for _TEAM_CACHE / _PLAYER_CACHE.
+_gemini_client: Optional[genai.Client] = None
+_gemini_lock = threading.Lock()
+
+
+def _get_gemini_client() -> genai.Client:
+    global _gemini_client
+    with _gemini_lock:
+        if _gemini_client is None:
+            api_key = os.getenv("GEMINI_API_KEY")
+            if not api_key:
+                raise ValueError(
+                    "GEMINI_API_KEY is not set. "
+                    "Add it to your .env file — get a free key at https://aistudio.google.com/app/apikey"
+                )
+            _gemini_client = genai.Client(api_key=api_key)
+    return _gemini_client
 
 # -------------------------------------------------------
 # Basic Rate Limiting (per browser session, no external infra needed)
@@ -87,36 +151,23 @@ def _check_rate_limit() -> Optional[str]:
             f"to start a new session."
         )
 
+    # Reset the burst window if it has expired.
     if now - rl["window_start"] >= _RATE_LIMIT_WINDOW_SECONDS:
         rl["window_start"] = now
         rl["window_count"] = 0
 
+    # The window reset above already handles the expired-window case, so
+    # wait is always positive here if we're still over the limit.
     if rl["window_count"] >= _RATE_LIMIT_MAX_PER_WINDOW:
         wait = int(_RATE_LIMIT_WINDOW_SECONDS - (now - rl["window_start"]))
-        if wait <= 0:
-            # Window has actually expired — reset and allow
-            rl["window_start"] = now
-            rl["window_count"] = 0
-        else:
-            st.session_state["rate_limit"] = rl
-            return f"⚠️ You're sending messages a bit fast — please wait ~{wait}s and try again."
+        st.session_state["rate_limit"] = rl
+        return f"⚠️ You're sending messages a bit fast — please wait ~{wait}s and try again."
 
     rl["window_count"]  += 1
     rl["session_count"] += 1
     st.session_state["rate_limit"] = rl
     return None
 
-
-def _get_gemini_client() -> genai.Client:
-    if "gemini_client" not in st.session_state:
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            raise ValueError(
-                "GEMINI_API_KEY is not set. "
-                "Add it to your .env file — get a free key at https://aistudio.google.com/app/apikey"
-            )
-        st.session_state["gemini_client"] = genai.Client(api_key=api_key)
-    return st.session_state["gemini_client"]
 
 
 def _call_gemini(system: str, user: str, expect_json: bool = False) -> str:
@@ -132,11 +183,11 @@ def _call_gemini(system: str, user: str, expect_json: bool = False) -> str:
         if expect_json:
             text = text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         return text
-    except ValueError as e:
-        logger.error(f"Gemini config error: {e}")
-        return f"__CONFIG_ERROR__: {e}"
-    except Exception as e:
-        logger.error(f"Gemini API call failed: {e}")
+    except ValueError:
+        logger.error("Gemini config error: invalid configuration (check GEMINI_API_KEY and model name)")
+        return "__CONFIG_ERROR__"
+    except Exception:
+        logger.error("Gemini API call failed: unexpected error from SDK")
         return "__API_ERROR__"
 
 
@@ -152,11 +203,11 @@ def _stream_gemini(system: str, user: str) -> Generator[str, None, None]:
         for chunk in stream:
             if chunk.text:
                 yield chunk.text
-    except ValueError as e:
-        logger.error(f"Gemini stream config error: {e}")
-        yield f"__CONFIG_ERROR__: {e}"
-    except Exception as e:
-        logger.error(f"Gemini stream failed: {e}")
+    except ValueError:
+        logger.error("Gemini stream config error: invalid configuration (check GEMINI_API_KEY and model name)")
+        yield "__CONFIG_ERROR__"
+    except Exception:
+        logger.error("Gemini stream failed: unexpected error from SDK")
         yield "__API_ERROR__"
 
 
@@ -250,7 +301,7 @@ def _extract_intent(user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
-        logger.warning(f"Gemini returned non-JSON: {raw[:200]}")
+        logger.warning("Gemini returned non-JSON for intent extraction (first 200 chars redacted from log)")
         team = detect_team_from_query(user_input)
         return {"intents": ["general"], "team": team, "player": None,
                 "player_b": None, "season": None, "raw_query": user_input}
@@ -259,162 +310,139 @@ def _extract_intent(user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
 # -------------------------------------------------------
 # Step 2 — Concurrent Data Dispatch
 # -------------------------------------------------------
+# Intent handlers — one function per intent that needs more than a single
+# API call.  Simple intents are wired up directly in _INTENT_DISPATCH below.
+# All handlers share the signature (team, player, player_b, raw_query, season).
+# Unused parameters are collected into *_ to signal intent clearly.
+# -------------------------------------------------------
+
+
+def _build_chart_data(player_name: str) -> Optional[Dict[str, Any]]:
+    """
+    Delegates to api_client.get_player_chart_data — returns weekly PPR data
+    for a sparkline chart, or None if insufficient data.
+    """
+    try:
+        return get_player_chart_data(player_name)
+    except Exception as e:
+        logger.warning(f"chart_data build failed for {player_name}: {e}")
+        return None
+
+
+def _maybe_attach_chart(result: Any, player_name: str) -> Any:
+    """Attach chart_data to a plain-text result if sparkline data is available.
+
+    Chart is only appended to string responses — structured dicts carry their
+    own data and don't need a sparkline overlay.
+    """
+    if not isinstance(result, str):
+        return result
+    chart = _build_chart_data(player_name)
+    return {"_text": result, "chart_data": chart} if chart else result
+
+
+def _position_hint(player: Optional[str], valid: AbstractSet[str]) -> Optional[str]:
+    """Return the upper-cased position token when *player* is a known position string, else None."""
+    return player.upper() if player and player.upper() in valid else None
+
+
+def _handle_player(team, player, *_):
+    name = player or team
+    if not name:
+        return "Which player?"
+    profile = get_player_profile_smart(name)
+    # Profile dicts carry their own structured data; chart is only appended
+    # to plain-text responses where a sparkline adds meaningful context.
+    return _maybe_attach_chart(profile, name)
+
+
+def _handle_fantasy(team, player, _player_b, raw_query, *_):
+    if not player:
+        return "Which player do you want fantasy info for?"
+    if any(kw in raw_query.lower() for kw in _SIT_START_KEYWORDS):
+        result = get_fantasy_sit_start(player, team)  # team used for matchup context
+    else:
+        result = get_fantasy_player_stats(player)
+    return _maybe_attach_chart(result, player)
+
+
+def _handle_comparison(_team, player, player_b, *_):
+    if player and player_b:
+        return get_player_comparison(player, player_b)
+    if player:
+        return f"I need two players to compare. Who should I compare {player} against?"
+    return "Please name two players to compare."
+
+
+def _handle_trade(_team, player, player_b, *_):
+    if player and player_b:
+        return get_trade_analysis(player, player_b)
+    if player:
+        return f"I need both players in the trade. Who would you get in return for {player}?"
+    return "Please name both players in the trade."
+
+
+def _handle_waiver(_team, player, *_):
+    # Position hint is stored in the player slot by the extraction prompt.
+    return get_waiver_recommendations(position=_position_hint(player, _WAIVER_POSITIONS))
+
+
+def _handle_roster(team, player, *_):
+    if not team:
+        return "Which team's roster would you like to see?"
+    # Position hint stored in the player slot (mirrors waiver pattern).
+    return get_team_roster(team, position=_position_hint(player, VALID_POSITIONS))
+
+
+def _handle_history(team, player, _player_b, _raw_query, season, *_):
+    if not player:
+        return "Which player's game history would you like to see?"
+    return get_player_history(player, opponent_team=team, season_year=season)
+
+
+# Maps each intent string to an IntentHandler with signature
+# (team, player, player_b, raw_query, season) -> Any.
+# Simple one-liner intents use lambdas that name only what they use;
+# intents with branching logic use the named handler functions defined above.
+_INTENT_DISPATCH: Dict[str, IntentHandler] = {
+    "scores":      lambda t, *_: get_live_scores(t),
+    "last_game":   lambda t, *_: get_last_game(t) if t else "Please specify a team.",
+    "standings":   lambda t, *_: get_standings(t),
+    "news":        lambda t, *_: get_team_news(t or "NFL"),
+    "league_news": lambda *_: get_league_headlines(),
+    "schedule":    lambda t, *_: get_next_game(t) if t else "Please specify a team.",
+    "injury":      lambda t, p, *_: get_player_injury(p or t) if (p or t) else "Which player's injury status?",
+    "odds":        lambda t, *_: get_game_odds(t) if t else "Which team's betting lines?",
+    "player":      _handle_player,
+    "fantasy":     _handle_fantasy,
+    "comparison":  _handle_comparison,
+    "trade":       _handle_trade,
+    "waiver":      _handle_waiver,
+    "roster":      _handle_roster,
+    "history":     _handle_history,
+}
+
 
 def _fetch_one(intent: str, team: Optional[str], player: Optional[str],
                player_b: Optional[str], raw_query: str,
                season: Optional[int] = None) -> tuple[str, Any]:
     """Fetch data for a single intent. Runs in a thread pool."""
     try:
-        if intent == "scores":
-            return intent, get_live_scores(team)
-
-        elif intent == "last_game":
-            return intent, get_last_game(team) if team else "Please specify a team."
-
-        elif intent == "standings":
-            return intent, get_standings(team)
-
-        elif intent == "news":
-            return intent, get_team_news(team or "NFL")
-
-        elif intent == "league_news":
-            return intent, get_league_headlines()
-
-        elif intent == "schedule":
-            return intent, get_next_game(team) if team else "Please specify a team."
-
-        elif intent == "player":
-            name = player or team
-            if not name:
-                return intent, "Which player?"
-            profile = get_player_profile_smart(name)
-            # Task 14 — attach chart_data so app.py can render a points trend
-            if isinstance(profile, str):
-                chart = _build_chart_data(name)
-                return intent, {"_text": profile, "chart_data": chart} if chart else profile
-            return intent, profile
-
-        elif intent == "injury":
-            name = player or team
-            return intent, get_player_injury(name) if name else "Which player's injury status?"
-
-        elif intent == "fantasy":
-            name = player
-            if not name:
-                return intent, "Which player do you want fantasy info for?"
-            sit_start_kw = {"start", "sit", "bench", "lineup", "waiver", "should i"}
-            if any(kw in raw_query.lower() for kw in sit_start_kw):
-                result = get_fantasy_sit_start(name, team)
-            else:
-                result = get_fantasy_player_stats(name)
-            # Task 14 — attach chart_data for fantasy responses too
-            chart = _build_chart_data(name)
-            if chart and isinstance(result, str):
-                return intent, {"_text": result, "chart_data": chart}
-            return intent, result
-
-        elif intent == "comparison":
-            # #3 — player comparison
-            if player and player_b:
-                return intent, get_player_comparison(player, player_b)
-            elif player:
-                return intent, f"I need two players to compare. Who should I compare {player} against?"
-            return intent, "Please name two players to compare."
-
-        elif intent == "trade":
-            # #5 — trade advice
-            if player and player_b:
-                return intent, get_trade_analysis(player, player_b)
-            elif player:
-                return intent, f"I need both players in the trade. Who would you get in return for {player}?"
-            return intent, "Please name both players in the trade."
-
-        elif intent == "waiver":
-            # position hint stored in player slot by the extraction prompt
-            pos = player if player and player.upper() in {"QB", "RB", "WR", "TE"} else None
-            return intent, get_waiver_recommendations(position=pos)
-
-        elif intent == "odds":
-            return intent, get_game_odds(team) if team else "Which team's betting lines?"
-
-        elif intent == "roster":
-            if not team:
-                return intent, "Which team's roster would you like to see?"
-            # position hint stored in player slot (mirrors waiver pattern)
-            pos = player if player and player.upper() in VALID_POSITIONS else None
-            return intent, get_team_roster(team, position=pos)
-
-        elif intent == "history":
-            # Task 15 — historical game log
-            name = player
-            if not name:
-                return intent, "Which player's game history would you like to see?"
-            return intent, get_player_history(name, opponent_team=team, season_year=season)
-
-        else:
-            return intent, None  # general — Gemini answers from knowledge
-
+        handler = _INTENT_DISPATCH.get(intent)
+        if handler:
+            return intent, handler(team, player, player_b, raw_query, season)
+        return intent, None  # "general" and unknown intents — Gemini answers from knowledge
     except Exception as e:
         logger.error(f"Dispatch error for intent '{intent}': {e}")
         return intent, f"I ran into a problem fetching {intent} data."
 
 
-def _build_chart_data(player_name: str) -> Optional[Dict[str, Any]]:
+def _dispatch(parsed: Dict[str, Any]) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    """Run all intent fetches in parallel.
+
+    Returns a (results, chart_data) tuple so the caller doesn't need a
+    second pass over results to find the chart payload.
     """
-    Builds weekly PPR points data for a sparkline chart.
-    Returns {"weeks": [...], "pts": [...]} if ≥4 weeks of data exist, else None.
-    Called from _fetch_one for player/fantasy intents (Task 14).
-    """
-    try:
-        from src.api_client import _PLAYER_CACHE, _ensure_player_cache, ENDPOINTS, _current_nfl_season_year
-        from src.utils import fetch_json, is_fuzzy_match, clean_query
-        import concurrent.futures as _cf
-        import datetime as _dt
-
-        _ensure_player_cache()
-        q = clean_query(player_name)
-        matches = [
-            (pid, p) for pid, p in _PLAYER_CACHE.items()
-            if p.get("full_name") and is_fuzzy_match(q, p["full_name"]) and p.get("active")
-        ]
-        if not matches:
-            return None
-
-        pid = matches[0][0]
-        year = _current_nfl_season_year()
-
-        today = _dt.datetime.now()
-        season_start = _dt.datetime(today.year if today.month >= 9 else today.year - 1, 9, 1)
-        current_week = min(max(1, int((today - season_start).days // 7) + 1), 18)
-        weeks_to_fetch = list(range(1, current_week + 1))
-
-        def _fetch_week(week: int):
-            url = ENDPOINTS["sleeper_stats_week"].format(year=year, week=week)
-            data = fetch_json(url)
-            return week, data.get(pid, {}) if "__error" not in data else {}
-
-        week_pts = {}
-        with _cf.ThreadPoolExecutor(max_workers=5) as pool:
-            for week, stats in pool.map(_fetch_week, weeks_to_fetch):
-                pts = stats.get("pts_ppr")
-                if pts is not None:
-                    week_pts[week] = round(pts, 1)
-
-        if len(week_pts) < 4:
-            return None
-
-        sorted_weeks = sorted(week_pts.keys())
-        return {
-            "weeks": [f"Wk {w}" for w in sorted_weeks],
-            "pts": [week_pts[w] for w in sorted_weeks],
-        }
-    except Exception as e:
-        logger.warning(f"chart_data build failed for {player_name}: {e}")
-        return None
-
-
-def _dispatch(parsed: Dict[str, Any]) -> Dict[str, Any]:
-    """Run all intent fetches in parallel."""
     # .get(..., ["general"]) only falls back when the key is *missing* —
     # if Gemini returns "intents": [] (present but empty), that default
     # never kicks in and max_workers below becomes 0, which crashes
@@ -435,7 +463,16 @@ def _dispatch(parsed: Dict[str, Any]) -> Dict[str, Any]:
         for future in as_completed(futures):
             intent_key, result = future.result()
             results[intent_key] = result
-    return results
+
+    # Extract chart_data in one pass here rather than forcing the caller to
+    # iterate results a second time.
+    chart_data: Optional[Dict[str, Any]] = None
+    for result in results.values():
+        if isinstance(result, dict) and "chart_data" in result:
+            chart_data = result["chart_data"]
+            break
+
+    return results, chart_data
 
 
 # -------------------------------------------------------
@@ -470,9 +507,9 @@ def _build_format_prompt(user_input: str, data_results: Dict[str, Any],
     """Builds the formatting prompt including history and conversation state."""
     history_str = ""
     if conversation_history:
-        recent = conversation_history[-6:]
+        recent = conversation_history[-_HISTORY_TURNS:]
         lines = [
-            f"{'User' if m['role'] == 'user' else 'Assistant'}: {m['content'][:300]}"
+            f"{'User' if m['role'] == 'user' else 'Assistant'}: {m['content'][:_HISTORY_MAX_CHARS]}"
             for m in recent
         ]
         history_str = "\nConversation so far:\n" + "\n".join(lines) + "\n"
@@ -490,9 +527,14 @@ def _build_format_prompt(user_input: str, data_results: Dict[str, Any],
     data_str = ""
     for intent, data in data_results.items():
         if isinstance(data, dict):
-            # Task 14 — unwrap player/fantasy results that carry chart_data
             if "_text" in data:
+                # chart_data wrapper from _maybe_attach_chart — extract the text portion
                 data_str += f"\n[{intent.upper()} DATA]\n{data['_text']}\n"
+            elif data.get("type") != "selection_required":
+                # Real structured dict (e.g. trade analysis, comparison) — serialize it
+                # so Gemini can read it.  Disambiguation dicts are excluded because
+                # app.py handles those before stream_response is ever called.
+                data_str += f"\n[{intent.upper()} DATA]\n{json.dumps(data, indent=2)}\n"
             continue
         if data:
             data_str += f"\n[{intent.upper()} DATA]\n{data}\n"
@@ -560,7 +602,12 @@ def _update_conv_state(parsed: Dict[str, Any],
         if intents & {"comparison", "player", "general"}:
             return current_state  # keep the existing state
 
-    # New unrelated intent — clear state
+    # New unrelated intent — clear state.
+    # Note: "waiver" and "fantasy" are intentionally absent from this set so
+    # that mid-trade/comparison context is preserved when the user asks a
+    # fantasy follow-up (e.g. "who should I pick up at WR?" during a trade
+    # discussion).  If that behaviour ever needs to change, add those intents
+    # to the set below.
     if intents & {"scores", "standings", "news", "league_news", "schedule",
                   "last_game", "injury", "odds", "roster"}:
         return {}
@@ -572,14 +619,14 @@ def _update_conv_state(parsed: Dict[str, Any],
 # Main Entry Point
 # -------------------------------------------------------
 
-def nfl_chatbot_with_context(user_input: str) -> Union[str, Dict[str, Any], Generator]:
+def nfl_chatbot_with_context(user_input: str) -> Union[str, Dict[str, Any], ChatbotResponse]:
     """
     Full pipeline:
       1. Extract intent + entities via Gemini (blocking)
       2. Fetch all data concurrently
       3. Check for disambiguation → return dict for app.py
-      4. Update conversation state (#7)
-      5. Return streaming generator for app.py → st.write_stream()
+      4. Update conversation state
+      5. Return ChatbotResponse(stream, chart_data) for app.py → st.write_stream()
       6. Update session memory
     """
     context = {
@@ -596,29 +643,29 @@ def nfl_chatbot_with_context(user_input: str) -> Union[str, Dict[str, Any], Gene
 
     # Step 1 — understand
     parsed = _extract_intent(user_input, context)
-    logger.info(f"Parsed intent: {parsed}")
+    # Log structured intent metadata only — raw_query is omitted to avoid
+    # persisting user message content in cloud log aggregators, which would
+    # contradict the privacy policy ("no personal data collected").
+    logger.info(
+        "intent_extraction intents=%s team=%s player=%s player_b=%s season=%s",
+        parsed.get("intents"),
+        parsed.get("team"),
+        parsed.get("player"),
+        parsed.get("player_b"),
+        parsed.get("season"),
+    )
 
     # Step 2 — fetch
-    data_results = _dispatch(parsed)
+    data_results, chart_data = _dispatch(parsed)
 
     # Step 3 — disambiguation
     for result in data_results.values():
         if isinstance(result, dict) and result.get("type") == "selection_required":
             return result
 
-    # Step 4 — update conversation state (#7)
+    # Step 4 — update conversation state
     new_conv_state = _update_conv_state(parsed, context.get("conv_state", {}))
     st.session_state["conv_state"] = new_conv_state
-
-    # Task 14 — surface chart_data to app.py via session_state so the
-    # function signature stays unchanged.  app.py reads and clears it
-    # after st.write_stream completes.
-    chart_data = None
-    for result in data_results.values():
-        if isinstance(result, dict) and "chart_data" in result:
-            chart_data = result["chart_data"]
-            break
-    st.session_state["_pending_chart_data"] = chart_data
 
     # Step 5 — stream
     generator = stream_response(
@@ -636,4 +683,4 @@ def nfl_chatbot_with_context(user_input: str) -> Union[str, Dict[str, Any], Gene
         if not new_player:
             st.session_state["last_mentioned"] = new_team
 
-    return generator
+    return ChatbotResponse(stream=generator, chart_data=chart_data)

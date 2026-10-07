@@ -84,7 +84,8 @@ class TestDispatch:
     def _run(self, intents, team=None, player=None, player_b=None, raw="test"):
         parsed = {"intents": intents, "team": team, "player": player,
                   "player_b": player_b, "raw_query": raw}
-        return chatbot._dispatch(parsed)
+        results, _chart = chatbot._dispatch(parsed)
+        return results
 
     def test_scores_intent(self):
         result = self._run(["scores"], team="Buffalo Bills")
@@ -351,6 +352,6 @@ class TestExtractIntentFallback:
         # _dispatch must not crash when Gemini returns intents=[]
         parsed = {"intents": [], "team": None, "player": None,
                   "player_b": None, "raw_query": "test"}
-        result = chatbot._dispatch(parsed)
+        results, _chart = chatbot._dispatch(parsed)
         # Falls back to ["general"] internally — general returns None
-        assert result.get("general") is None
+        assert results.get("general") is None

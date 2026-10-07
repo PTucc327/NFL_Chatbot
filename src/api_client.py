@@ -228,9 +228,17 @@ def find_team(query: Optional[str]) -> Optional[Dict[str, Any]]:
 # ----------------------------------------------------
 
 def _fetch_rss_thread(url: str) -> List[Dict[str, str]]:
-    """Internal helper for concurrent RSS fetching."""
+    """Internal helper for concurrent RSS fetching.
+
+    feedparser.parse(url) opens its own HTTP connection with no configurable
+    timeout — on a stalled server it can block a worker thread indefinitely.
+    Fix: fetch the raw bytes ourselves via requests (with a timeout) and pass
+    the text to feedparser so it never makes a network call of its own.
+    """
     try:
-        feed = feedparser.parse(url)
+        resp = requests.get(url, timeout=8, headers={"User-Agent": "NFL-Pro-Bot/1.0"})
+        resp.raise_for_status()
+        feed = feedparser.parse(resp.text)
         return [{"title": e.title, "link": e.link, "desc": e.get("summary", "")} for e in feed.entries]
     except Exception as e:
         logger.warning(f"RSS fetch failed for {url}: {e}")
@@ -1090,6 +1098,55 @@ def get_waiver_recommendations(position: Optional[str] = None, top_n: int = 5) -
         )
 
     return "\n".join(lines)
+
+
+# ----------------------------------------------------
+# Weekly PPR Chart Data (sparkline support)
+# ----------------------------------------------------
+
+def get_player_chart_data(player_name: str) -> Optional[Dict[str, Any]]:
+    """
+    Returns {"weeks": [...], "pts": [...]} for a weekly PPR sparkline chart,
+    or None if fewer than 4 weeks of data are available.
+
+    Fetches each week sequentially — the number of weeks is small (≤18) and
+    this function is called from within a ThreadPoolExecutor in chatbot.py,
+    so spinning up a nested pool would create unnecessary overhead.
+    """
+    _ensure_player_cache()
+    q = clean_query(player_name)
+
+    matches = [
+        (pid, p) for pid, p in _PLAYER_CACHE.items()
+        if p.get("full_name") and is_fuzzy_match(q, p["full_name"]) and p.get("active")
+    ]
+    if not matches:
+        return None
+
+    pid = matches[0][0]
+    year = _current_nfl_season_year()
+
+    today = datetime.datetime.now()
+    season_start = datetime.datetime(today.year if today.month >= 9 else today.year - 1, 9, 1)
+    current_week = min(max(1, int((today - season_start).days // 7) + 1), 18)
+
+    week_pts: Dict[int, float] = {}
+    for week in range(1, current_week + 1):
+        url = ENDPOINTS["sleeper_stats_week"].format(year=year, week=week)
+        data = fetch_json(url)
+        if "__error" not in data:
+            pts = data.get(pid, {}).get("pts_ppr")
+            if pts is not None:
+                week_pts[week] = round(pts, 1)
+
+    if len(week_pts) < 4:
+        return None
+
+    sorted_weeks = sorted(week_pts.keys())
+    return {
+        "weeks": [f"Wk {w}" for w in sorted_weeks],
+        "pts": [week_pts[w] for w in sorted_weeks],
+    }
 
 
 # ----------------------------------------------------
