@@ -41,7 +41,9 @@ jobs:
         run: pip install detect-secrets==1.5.0
 
       - name: Run secrets scan
-        run: detect-secrets scan --baseline .secrets.baseline
+        # `scan --baseline` only rewrites the baseline and always exits 0;
+        # the hook exits non-zero when a secret is not in the baseline.
+        run: git ls-files -z | xargs -0 detect-secrets-hook --baseline .secrets.baseline
 
   dependency-audit:
     name: Dependency CVE Audit
