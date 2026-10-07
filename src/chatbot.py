@@ -170,6 +170,77 @@ def _check_rate_limit() -> Optional[str]:
 
 
 
+# -------------------------------------------------------
+# App-wide Gemini budget (shared by every session in this process)
+# -------------------------------------------------------
+# The per-session limiter above resets on page refresh and can't see other
+# users, but every session spends the same API key. These caps protect the
+# key's quota (and bill) as a whole. Module globals are process-wide in
+# Streamlit, which is one process per deployed app. Override via env vars;
+# 0 disables a cap.
+_GLOBAL_MAX_PER_MINUTE = int(os.getenv("GEMINI_MAX_MSGS_PER_MIN", "5"))
+_GLOBAL_MAX_PER_DAY    = int(os.getenv("GEMINI_MAX_MSGS_PER_DAY", "200"))
+_QUOTA_COOLDOWN_SECONDS = 60
+_DAILY_QUOTA_COOLDOWN_SECONDS = 15 * 60
+
+_budget_lock = threading.Lock()
+_budget = {"minute": [], "day": None, "day_count": 0, "cooldown_until": 0.0}
+
+QUOTA_ERROR = "__QUOTA_ERROR__"
+API_ERROR = "__API_ERROR__"
+CONFIG_ERROR = "__CONFIG_ERROR__"
+_ERROR_SENTINELS = (QUOTA_ERROR, API_ERROR, CONFIG_ERROR)
+
+BUSY_MESSAGE = (
+    "⚠️ NFL Pro-Bot is getting more questions than it can answer right now. "
+    "Please try again in about a minute."
+)
+DAILY_LIMIT_MESSAGE = (
+    "⚠️ NFL Pro-Bot has reached its daily question limit. Please come back tomorrow!"
+)
+
+
+def _check_global_budget() -> Optional[str]:
+    """Returns a user-facing message if the app-wide budget is spent, else None."""
+    now = time.time()
+    today = time.strftime("%Y-%m-%d", time.gmtime(now))
+    with _budget_lock:
+        if now < _budget["cooldown_until"]:
+            return BUSY_MESSAGE
+        if _budget["day"] != today:
+            _budget["day"], _budget["day_count"] = today, 0
+        if _GLOBAL_MAX_PER_DAY and _budget["day_count"] >= _GLOBAL_MAX_PER_DAY:
+            return DAILY_LIMIT_MESSAGE
+        _budget["minute"] = [t for t in _budget["minute"] if now - t < 60]
+        if _GLOBAL_MAX_PER_MINUTE and len(_budget["minute"]) >= _GLOBAL_MAX_PER_MINUTE:
+            return BUSY_MESSAGE
+        _budget["minute"].append(now)
+        _budget["day_count"] += 1
+    return None
+
+
+def _gemini_error(exc: Exception) -> str:
+    """Maps an SDK exception to a sentinel and logs it without key or prompt text."""
+    code = getattr(exc, "code", None)
+    if code == 429:
+        violations = [
+            v.get("quotaId")
+            for d in (getattr(exc, "details", None) or {}).get("error", {}).get("details", [])
+            if isinstance(d, dict) for v in d.get("violations", []) if isinstance(v, dict)
+        ]
+        # A spent daily quota won't recover in a minute; back off longer.
+        cooldown = (_DAILY_QUOTA_COOLDOWN_SECONDS
+                    if any("PerDay" in (q or "") for q in violations)
+                    else _QUOTA_COOLDOWN_SECONDS)
+        with _budget_lock:
+            _budget["cooldown_until"] = time.time() + cooldown
+        logger.warning("Gemini quota exhausted (429) quota_ids=%s - cooling down %ss",
+                       violations, cooldown)
+        return QUOTA_ERROR
+    logger.error("Gemini API call failed: %s code=%s", type(exc).__name__, code)
+    return API_ERROR
+
+
 def _call_gemini(system: str, user: str, expect_json: bool = False) -> str:
     """Blocking call — used for intent extraction."""
     try:
@@ -179,16 +250,15 @@ def _call_gemini(system: str, user: str, expect_json: bool = False) -> str:
             contents=user,
             config=types.GenerateContentConfig(system_instruction=system, temperature=0.3),
         )
-        text = response.text.strip()
+        text = (response.text or "").strip()
         if expect_json:
             text = text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         return text
     except ValueError:
         logger.error("Gemini config error: invalid configuration (check GEMINI_API_KEY and model name)")
-        return "__CONFIG_ERROR__"
-    except Exception:
-        logger.error("Gemini API call failed: unexpected error from SDK")
-        return "__API_ERROR__"
+        return CONFIG_ERROR
+    except Exception as e:
+        return _gemini_error(e)
 
 
 def _stream_gemini(system: str, user: str) -> Generator[str, None, None]:
@@ -205,10 +275,9 @@ def _stream_gemini(system: str, user: str) -> Generator[str, None, None]:
                 yield chunk.text
     except ValueError:
         logger.error("Gemini stream config error: invalid configuration (check GEMINI_API_KEY and model name)")
-        yield "__CONFIG_ERROR__"
-    except Exception:
-        logger.error("Gemini stream failed: unexpected error from SDK")
-        yield "__API_ERROR__"
+        yield CONFIG_ERROR
+    except Exception as e:
+        yield _gemini_error(e)
 
 
 # -------------------------------------------------------
@@ -562,7 +631,30 @@ def stream_response(user_input: str, data_results: Dict[str, Any],
         return  # disambiguation only — app.py handles it
 
     prompt = _build_format_prompt(user_input, data_results, conversation_history, conv_state)
-    yield from _stream_gemini(_FORMATTING_SYSTEM, prompt)
+    first = True
+    for chunk in _stream_gemini(_FORMATTING_SYSTEM, prompt):
+        if chunk in _ERROR_SENTINELS:
+            if not first:
+                yield "\n\n_(The response was cut off — please try again.)_"
+            elif chunk != CONFIG_ERROR and (raw := _raw_data_fallback(non_disambig)):
+                # The data is already fetched; show it rather than an error.
+                yield ("_The AI assistant is busy, so here's the raw data "
+                       "I found:_\n\n" + raw)
+            else:
+                yield chunk  # app.py renders the matching error message
+            return
+        first = False
+        yield chunk
+
+
+def _raw_data_fallback(data_results: Dict[str, Any]) -> str:
+    """Markdown from fetched data, used when Gemini can't format a reply."""
+    parts = []
+    for data in data_results.values():
+        text = data.get("_text") if isinstance(data, dict) else data
+        if isinstance(text, str) and text.strip():
+            parts.append(text.strip())
+    return "\n\n".join(parts)
 
 
 # -------------------------------------------------------
@@ -638,12 +730,16 @@ def nfl_chatbot_with_context(user_input: str) -> Union[str, Dict[str, Any], Chat
     conversation_history = st.session_state.get("messages", [])
 
     # Step 0 — rate limit check, before any Gemini call is made
-    limit_msg = _check_rate_limit()
+    limit_msg = _check_rate_limit() or _check_global_budget()
     if limit_msg:
         return limit_msg
 
     # Step 1 — understand
     parsed = _extract_intent(user_input, context)
+    if parsed.get("__error") == QUOTA_ERROR:
+        # Without intents there's no data to fall back on, and formatting
+        # would hit the same quota — answer now instead of spending a call.
+        return BUSY_MESSAGE
     # Log structured intent metadata only — raw_query is omitted to avoid
     # persisting user message content in cloud log aggregators, which would
     # contradict the privacy policy ("no personal data collected").

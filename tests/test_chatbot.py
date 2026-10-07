@@ -355,3 +355,89 @@ class TestExtractIntentFallback:
         results, _chart = chatbot._dispatch(parsed)
         # Falls back to ["general"] internally — general returns None
         assert results.get("general") is None
+
+
+# ─── App-wide Gemini budget & quota handling ──────────────────────
+
+class _FakeQuotaError(Exception):
+    """Shaped like google.genai.errors.APIError for a 429."""
+    code = 429
+    details = {"error": {"details": [{"violations": [
+        {"quotaId": "GenerateRequestsPerMinutePerProjectPerModel-FreeTier"}]}]}}
+
+
+@pytest.fixture
+def fresh_budget():
+    chatbot._budget.update(minute=[], day=None, day_count=0, cooldown_until=0.0)
+    yield
+    chatbot._budget.update(minute=[], day=None, day_count=0, cooldown_until=0.0)
+
+
+class TestGlobalBudget:
+    def test_per_minute_cap(self, fresh_budget):
+        with mock.patch.object(chatbot, "_GLOBAL_MAX_PER_MINUTE", 2):
+            assert chatbot._check_global_budget() is None
+            assert chatbot._check_global_budget() is None
+            assert chatbot._check_global_budget() == chatbot.BUSY_MESSAGE
+
+    def test_daily_cap(self, fresh_budget):
+        with mock.patch.object(chatbot, "_GLOBAL_MAX_PER_MINUTE", 0), \
+             mock.patch.object(chatbot, "_GLOBAL_MAX_PER_DAY", 3):
+            for _ in range(3):
+                assert chatbot._check_global_budget() is None
+            assert chatbot._check_global_budget() == chatbot.DAILY_LIMIT_MESSAGE
+
+    def test_429_sets_cooldown(self, fresh_budget):
+        assert chatbot._gemini_error(_FakeQuotaError()) == chatbot.QUOTA_ERROR
+        assert chatbot._check_global_budget() == chatbot.BUSY_MESSAGE
+
+    def test_other_errors_are_api_errors(self, fresh_budget):
+        assert chatbot._gemini_error(RuntimeError("boom")) == chatbot.API_ERROR
+        assert chatbot._check_global_budget() is None
+
+
+class TestQuotaFallback:
+    DATA = {"scores": "Bills **24** @ Patriots **17**"}
+
+    def test_quota_before_any_text_shows_raw_data(self):
+        with mock.patch.object(chatbot, "_stream_gemini",
+                               return_value=iter([chatbot.QUOTA_ERROR])):
+            out = "".join(chatbot.stream_response("scores?", self.DATA, [], {}))
+        assert "Bills **24**" in out and "busy" in out
+        assert chatbot.QUOTA_ERROR not in out
+
+    def test_error_mid_stream_is_not_printed(self):
+        with mock.patch.object(chatbot, "_stream_gemini",
+                               return_value=iter(["The Bills won", chatbot.API_ERROR])):
+            out = "".join(chatbot.stream_response("scores?", self.DATA, [], {}))
+        assert out.startswith("The Bills won") and "cut off" in out
+        assert chatbot.API_ERROR not in out
+
+    def test_config_error_still_reaches_app(self):
+        with mock.patch.object(chatbot, "_stream_gemini",
+                               return_value=iter([chatbot.CONFIG_ERROR])):
+            out = list(chatbot.stream_response("scores?", self.DATA, [], {}))
+        assert out == [chatbot.CONFIG_ERROR]
+
+    def test_quota_during_intent_extraction_returns_busy(self, fresh_budget):
+        chatbot.st.session_state = {}
+        with mock.patch.object(chatbot, "_call_gemini", return_value=chatbot.QUOTA_ERROR), \
+             mock.patch.object(chatbot, "_dispatch") as mock_dispatch:
+            result = chatbot.nfl_chatbot_with_context("how did the bills do")
+        assert result == chatbot.BUSY_MESSAGE
+        mock_dispatch.assert_not_called()
+
+
+class TestQuotaCooldown:
+    def test_daily_quota_backs_off_longer(self, fresh_budget):
+        class DailyQuota(_FakeQuotaError):
+            details = {"error": {"details": [{"violations": [
+                {"quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier"}]}]}}
+        before = chatbot.time.time()
+        chatbot._gemini_error(DailyQuota())
+        assert chatbot._budget["cooldown_until"] - before >= chatbot._DAILY_QUOTA_COOLDOWN_SECONDS - 1
+
+    def test_per_minute_quota_backs_off_briefly(self, fresh_budget):
+        before = chatbot.time.time()
+        chatbot._gemini_error(_FakeQuotaError())
+        assert chatbot._budget["cooldown_until"] - before <= chatbot._QUOTA_COOLDOWN_SECONDS + 1

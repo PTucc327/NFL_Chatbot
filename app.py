@@ -19,7 +19,7 @@ import streamlit as st
 from dotenv import load_dotenv
 from streamlit_mic_recorder import speech_to_text
 
-from src.chatbot import nfl_chatbot_with_context, ChatbotResponse
+from src.chatbot import nfl_chatbot_with_context, ChatbotResponse, QUOTA_ERROR, BUSY_MESSAGE
 
 load_dotenv()
 
@@ -728,6 +728,10 @@ if final_query:
                 )
                 st.error(error_msg)
                 st.session_state.messages.append({"role": "assistant", "content": error_msg, "time": reply_time})
+
+            elif first_chunk == QUOTA_ERROR:
+                st.warning(BUSY_MESSAGE)
+                st.session_state.messages.append({"role": "assistant", "content": BUSY_MESSAGE, "time": reply_time})
 
             elif isinstance(first_chunk, str) and first_chunk.startswith("__API_ERROR__"):
                 error_msg = "⚠️ I'm having trouble reaching Gemini right now. Please try again in a moment."
