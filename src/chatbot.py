@@ -22,7 +22,7 @@ import time
 from dataclasses import dataclass, field
 from collections.abc import Set as AbstractSet
 from typing import Optional, Union, Dict, Any, Generator, Protocol
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeout
 
 import streamlit as st
 from google import genai
@@ -68,6 +68,10 @@ _SIT_START_KEYWORDS = frozenset({"start", "sit", "bench", "lineup", "waiver", "s
 # maximum characters per turn to include (prevents prompt bloat).
 _HISTORY_TURNS = 6
 _HISTORY_MAX_CHARS = 300
+
+# Upper bound on data fetching per message. A single fetch retries for up to
+# ~13s (utils.fetch_json); past this, answer with whatever has arrived.
+_DISPATCH_TIMEOUT_SECONDS = 20
 
 
 class IntentHandler(Protocol):
@@ -525,14 +529,24 @@ def _dispatch(parsed: Dict[str, Any]) -> tuple[Dict[str, Any], Optional[Dict[str
     raw      = parsed.get("raw_query", "")
 
     results: Dict[str, Any] = {}
-    with ThreadPoolExecutor(max_workers=min(len(intents), 5)) as pool:
-        futures = {
-            pool.submit(_fetch_one, intent, team, player, player_b, raw, season): intent
-            for intent in intents
-        }
-        for future in as_completed(futures):
+    pool = ThreadPoolExecutor(max_workers=min(len(intents), 5))
+    futures = {
+        pool.submit(_fetch_one, intent, team, player, player_b, raw, season): intent
+        for intent in intents
+    }
+    try:
+        for future in as_completed(futures, timeout=_DISPATCH_TIMEOUT_SECONDS):
             intent_key, result = future.result()
             results[intent_key] = result
+    except FuturesTimeout:
+        for intent in futures.values():
+            if intent not in results:
+                logger.warning("Dispatch timeout for intent '%s' after %ss",
+                               intent, _DISPATCH_TIMEOUT_SECONDS)
+                results[intent] = f"The {intent} data source took too long to respond."
+    finally:
+        # Don't block the reply on stragglers; they finish in the background.
+        pool.shutdown(wait=False, cancel_futures=True)
 
     # Extract chart_data in one pass here rather than forcing the caller to
     # iterate results a second time.

@@ -338,7 +338,7 @@ THINKING_MESSAGES = [
     "Digging through the play-by-play...",
 ]
 
-def _typewriter(chunk_generator, delay: float = 0.02):
+def _typewriter(chunk_generator, delay: float = 0.005):  # ~1.5s added on a 300-word reply
     """
     Wraps a raw token/chunk generator and re-emits it word-by-word with a
     small delay between each, so replies visibly "type themselves out"

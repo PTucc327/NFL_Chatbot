@@ -441,3 +441,25 @@ class TestQuotaCooldown:
         before = chatbot.time.time()
         chatbot._gemini_error(_FakeQuotaError())
         assert chatbot._budget["cooldown_until"] - before <= chatbot._QUOTA_COOLDOWN_SECONDS + 1
+
+
+class TestDispatchTimeout:
+    def test_slow_intent_does_not_block_reply(self):
+        import threading
+        release = threading.Event()
+
+        def slow(*_):
+            release.wait(5)
+            return "late"
+
+        parsed = {"intents": ["scores", "standings"], "team": "Buffalo Bills",
+                  "player": None, "player_b": None, "raw_query": "test"}
+        with mock.patch.dict(chatbot._INTENT_DISPATCH, {"standings": slow}), \
+             mock.patch.object(chatbot, "_DISPATCH_TIMEOUT_SECONDS", 0.3):
+            start = chatbot.time.time()
+            results, _ = chatbot._dispatch(parsed)
+            elapsed = chatbot.time.time() - start
+        release.set()
+        assert elapsed < 2
+        assert results["scores"] == "Bills 24 @ Patriots 17"
+        assert "took too long" in results["standings"]

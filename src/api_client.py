@@ -662,6 +662,48 @@ def _resolve_player(name: str, team: Optional[str] = None) -> Optional[tuple]:
     return matches[0] if matches else None
 
 
+# -------------------------
+# Stats Cache
+# -------------------------
+# Every weekly/season stats request returns the whole league (~0.6 MB), and
+# a single player question used to fetch up to 18 of them uncached. Keep
+# only the fields the app reads; finished weeks rarely change (stat
+# corrections land within a day or two), the in-progress week changes live.
+_STAT_FIELDS = ("pts_ppr", "pass_yd", "pass_td", "pass_int", "rush_yd",
+                "rush_td", "rec", "rec_yd", "rec_td")
+_FINAL_STATS_TTL = 60 * 60 * 24
+_LIVE_STATS_TTL = 60 * 15
+_STATS_CACHE: Dict[tuple, tuple] = {}   # key -> (fetched_at, trimmed data)
+_STATS_CACHE_LOCK = threading.Lock()
+
+
+def _get_stats(year: int, week: Optional[int] = None) -> Optional[Dict[str, Dict[str, float]]]:
+    """
+    League-wide stats for a season (week=None) or a single week, trimmed to
+    _STAT_FIELDS and cached. Returns None when the fetch fails (not cached).
+    """
+    key = (year, week)
+    final = year < _current_nfl_season_year() or (week is not None and week < _current_nfl_week())
+    ttl = _FINAL_STATS_TTL if final else _LIVE_STATS_TTL
+    with _STATS_CACHE_LOCK:
+        hit = _STATS_CACHE.get(key)
+    if hit and time.time() - hit[0] < ttl:
+        return hit[1]
+
+    url = (ENDPOINTS["sleeper_stats"].format(year=year) if week is None
+           else ENDPOINTS["sleeper_stats_week"].format(year=year, week=week))
+    data = fetch_json(url)
+    if not isinstance(data, dict) or "__error" in data:
+        return None
+    trimmed = {
+        pid: {f: s[f] for f in _STAT_FIELDS if f in s}
+        for pid, s in data.items() if isinstance(s, dict)
+    }
+    with _STATS_CACHE_LOCK:
+        _STATS_CACHE[key] = (time.time(), trimmed)
+    return trimmed
+
+
 def get_player_profile_smart(user_input: str, team: Optional[str] = None) -> Union[str, Dict[str, Any]]:
     """
     Looks up a legend, prospect, or active player by name.
@@ -761,9 +803,8 @@ def get_fantasy_player_stats(query_name: str, team: Optional[str] = None) -> str
         return f"I'm not seeing any fantasy points recorded for {query_name} yet."
     pid, p = resolved
 
-    year = _current_nfl_season_year()
-    stats = fetch_json(ENDPOINTS["sleeper_stats"].format(year=year))
-    if "__error" in stats:
+    stats = _get_stats(_current_nfl_season_year())
+    if stats is None:
         return f"I couldn't reach the fantasy stats service for {p['full_name']} right now."
 
     pts = stats.get(pid, {}).get("pts_ppr", 0)
@@ -831,9 +872,7 @@ def get_player_weekly_stats(player_name: str, num_weeks: int = 5,
 
     # Fetch the last num_weeks weeks concurrently
     def _fetch_week(week: int):
-        url = ENDPOINTS["sleeper_stats_week"].format(year=year, week=week)
-        data = fetch_json(url)
-        return week, data.get(pid, {}) if "__error" not in data else {}
+        return week, (_get_stats(year, week) or {}).get(pid, {})
 
     # Current week from Sleeper (flips to the next week on Tuesday)
     current_week = _current_nfl_week()
@@ -1076,9 +1115,7 @@ def get_waiver_recommendations(position: Optional[str] = None, top_n: int = 5) -
     recent_weeks = list(range(max(1, current_week - 3), current_week + 1))
 
     def _fetch_week_data(week: int) -> tuple[int, dict]:
-        url  = ENDPOINTS["sleeper_stats_week"].format(year=year, week=week)
-        data = fetch_json(url)
-        return week, data if "__error" not in data else {}
+        return week, _get_stats(year, week) or {}
 
     week_data: dict[int, dict] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
@@ -1135,9 +1172,8 @@ def get_player_chart_data(player_name: str, team: Optional[str] = None) -> Optio
     Returns {"weeks": [...], "pts": [...]} for a weekly PPR sparkline chart,
     or None if fewer than 4 weeks of data are available.
 
-    Fetches each week sequentially — the number of weeks is small (≤18) and
-    this function is called from within a ThreadPoolExecutor in chatbot.py,
-    so spinning up a nested pool would create unnecessary overhead.
+    Weeks come from the stats cache, so after the first request only the
+    in-progress week is re-fetched.
     """
     resolved = _resolve_player(player_name, team)
     if not resolved:
@@ -1148,12 +1184,12 @@ def get_player_chart_data(player_name: str, team: Optional[str] = None) -> Optio
 
     current_week = _current_nfl_week()
 
+    def _week_pts(week: int):
+        return week, (_get_stats(year, week) or {}).get(pid, {}).get("pts_ppr")
+
     week_pts: Dict[int, float] = {}
-    for week in range(1, current_week + 1):
-        url = ENDPOINTS["sleeper_stats_week"].format(year=year, week=week)
-        data = fetch_json(url)
-        if "__error" not in data:
-            pts = data.get(pid, {}).get("pts_ppr")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+        for week, pts in pool.map(_week_pts, range(1, current_week + 1)):
             if pts is not None:
                 week_pts[week] = round(pts, 1)
 
@@ -1197,15 +1233,16 @@ def get_player_history(
     name   = player.get("full_name", player_name)
     pos    = player.get("position", "")
 
-    # Fetch all 18 weeks concurrently
+    # Fetch the season's weeks concurrently — only weeks played so far
+    # for the current season, all 18 for past seasons.
+    last_week = _current_nfl_week() if year == _current_nfl_season_year() else 18
+
     def _fetch_week(week: int):
-        url = ENDPOINTS["sleeper_stats_week"].format(year=year, week=week)
-        data = fetch_json(url)
-        return week, data.get(pid, {}) if "__error" not in data else {}
+        return week, (_get_stats(year, week) or {}).get(pid, {})
 
     week_data: Dict[int, Dict] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
-        for week, stats in pool.map(_fetch_week, range(1, 19)):
+        for week, stats in pool.map(_fetch_week, range(1, last_week + 1)):
             if stats:
                 week_data[week] = stats
 

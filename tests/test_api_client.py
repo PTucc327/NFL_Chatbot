@@ -70,9 +70,13 @@ def inject_cache():
     """Put fake player data in the module's cache before each test."""
     _client_mod._PLAYER_CACHE      = FAKE_PLAYERS
     _client_mod._PLAYER_CACHE_LAST = datetime.datetime.now().timestamp() + 9999
+    # Stats/week caches would otherwise carry one test's mocked data into the next.
+    _client_mod._STATS_CACHE.clear()
+    _client_mod._WEEK_CACHE.update(week=None, at=0.0)
     yield
     _client_mod._PLAYER_CACHE      = {}
     _client_mod._PLAYER_CACHE_LAST = 0
+    _client_mod._STATS_CACHE.clear()
 
 
 # ─── _current_nfl_season_year ─────────────────────────────────────
@@ -884,3 +888,42 @@ class TestCurrentNflWeek:
             _client_mod._current_nfl_week()
             _client_mod._current_nfl_week()
         assert mock_fetch.call_count == 1
+
+
+# ─── Stats cache ──────────────────────────────────────────────────
+
+class TestStatsCache:
+    RAW = {"4984": {"pts_ppr": 30.5, "pass_yd": 280, "gp": 1, "off_snp": 70}}
+
+    def test_trims_to_used_fields(self):
+        with patch.object(_client_mod, "fetch_json", return_value=self.RAW), \
+             patch.object(_client_mod, "_current_nfl_week", return_value=5):
+            data = _client_mod._get_stats(2026, 3)
+        assert data == {"4984": {"pts_ppr": 30.5, "pass_yd": 280}}
+
+    def test_second_call_is_cached(self):
+        with patch.object(_client_mod, "fetch_json", return_value=self.RAW) as mock_fetch, \
+             patch.object(_client_mod, "_current_nfl_week", return_value=5):
+            _client_mod._get_stats(2026, 3)
+            _client_mod._get_stats(2026, 3)
+        assert mock_fetch.call_count == 1
+
+    def test_errors_are_not_cached(self):
+        with patch.object(_client_mod, "fetch_json",
+                          side_effect=[{"__error": "timeout"}, self.RAW]), \
+             patch.object(_client_mod, "_current_nfl_week", return_value=5):
+            assert _client_mod._get_stats(2026, 3) is None
+            assert _client_mod._get_stats(2026, 3) is not None
+
+    def test_live_week_expires_sooner_than_final_week(self):
+        with patch.object(_client_mod, "fetch_json", return_value=self.RAW) as mock_fetch, \
+             patch.object(_client_mod, "_current_nfl_week", return_value=5), \
+             patch.object(_client_mod, "_current_nfl_season_year", return_value=2026):
+            _client_mod._get_stats(2026, 3)   # final week
+            _client_mod._get_stats(2026, 5)   # in-progress week
+            # Age both entries past the live TTL but within the final TTL.
+            for key, (at, data) in list(_client_mod._STATS_CACHE.items()):
+                _client_mod._STATS_CACHE[key] = (at - _client_mod._LIVE_STATS_TTL - 1, data)
+            _client_mod._get_stats(2026, 3)
+            _client_mod._get_stats(2026, 5)
+        assert mock_fetch.call_count == 3  # only week 5 was re-fetched
