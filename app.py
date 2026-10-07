@@ -24,19 +24,18 @@ from src.chatbot import nfl_chatbot_with_context, ChatbotResponse, QUOTA_ERROR, 
 load_dotenv()
 
 # ------------------------------------------------------------------
-# Local profile persistence — favorite team/player survive app
-# restarts (local only). On Streamlit Cloud the container filesystem is
-# ephemeral AND shared, so writing to ~ would collide across users and
-# the file would vanish on every redeploy. We detect cloud via the
-# STREAMLIT_SHARING_MODE env var (set automatically by Streamlit Cloud)
-# and fall back to session-only state there.
+# Local profile persistence — favorite team/player survive app restarts.
+# OPT-IN (ENABLE_LOCAL_PREFS=1) for single-user local runs only: the file
+# lives on the machine running the server, so on any hosted deployment
+# every visitor would read and overwrite the same favorites. Off by
+# default, the profile lives in session state only.
 # ------------------------------------------------------------------
-_IS_CLOUD = bool(os.getenv("STREAMLIT_SHARING_MODE") or os.getenv("IS_STREAMLIT_CLOUD"))
+_PREFS_ENABLED = os.getenv("ENABLE_LOCAL_PREFS") == "1"
 _PREFS_PATH = os.path.join(os.path.expanduser("~"), ".nfl_chatbot_prefs.json")
 
 def _load_prefs() -> dict:
-    if _IS_CLOUD:
-        return {}  # no shared filesystem on cloud — use session state only
+    if not _PREFS_ENABLED:
+        return {}
     try:
         with open(_PREFS_PATH, "r") as f:
             return json.load(f)
@@ -44,8 +43,8 @@ def _load_prefs() -> dict:
         return {}
 
 def _save_prefs(prefs: dict) -> None:
-    if _IS_CLOUD:
-        return  # silently skip — profile lives in session_state only on cloud
+    if not _PREFS_ENABLED:
+        return  # profile lives in session_state only
     try:
         with open(_PREFS_PATH, "w") as f:
             json.dump(prefs, f)
@@ -83,7 +82,12 @@ st.set_page_config(
 # ------------------------------------------------------------------
 st.markdown("""
 <style>
-    #MainMenu, footer, header {visibility: hidden;}
+    /* Hide Streamlit chrome, but NOT the whole header: it contains the
+       only control that opens the (initially collapsed) sidebar. */
+    #MainMenu, footer,
+    [data-testid="stToolbarActions"], [data-testid="stAppDeployButton"],
+    [data-testid="stDecoration"] {visibility: hidden;}
+    header[data-testid="stHeader"] {background: transparent;}
 
     .stApp {
         background: radial-gradient(circle at 20% 0%, #16202b 0%, #0d1420 55%, #0a0f18 100%);

@@ -1,7 +1,7 @@
 # Privacy Policy
 
 **NFL Pro-Bot** ("the App", "we", "us")  
-Last updated: August 2026
+Last updated: October 2026
 
 ---
 
@@ -20,11 +20,11 @@ Specifically:
 | Data type | Collected? | Notes |
 |-----------|-----------|-------|
 | Name, email, phone | ❌ No | We have no account or login system |
-| IP address | ❌ No | We do not log requests |
+| IP address | ❌ Not by the App | The App does not log IP addresses or message text. The hosting provider (e.g. Streamlit Community Cloud) may keep standard server logs under its own privacy policy. |
 | Location | ❌ No | |
 | Conversation history | ❌ No | Chat exists only in your browser session and is deleted when you close the tab |
 | Cookies | ❌ No | Streamlit may use a technical session cookie scoped to your browser tab; no tracking cookies are set |
-| Favourite team / player preference | ⚠️ Local only | Stored in a JSON file on **your own machine** (`~/.nfl_chatbot_prefs.json`). Never sent to us. |
+| Favourite team / player preference | ⚠️ Session only | Kept in your browser session and cleared when you close the tab. (If you run the App yourself with `ENABLE_LOCAL_PREFS=1`, it is saved to `~/.nfl_chatbot_prefs.json` on the machine running the App.) |
 
 ---
 
@@ -39,7 +39,7 @@ The App makes outbound requests to these services on your behalf to answer your 
 | **Sleeper API** | Player profiles, injury status, fantasy stats | [Sleeper Privacy Policy](https://sleeper.com/privacy) |
 | **RSS feeds** (Yahoo Sports, NBC Sports PFT, Google News) | NFL news headlines | Subject to each publisher's policy |
 
-Your query text is sent to Google Gemini to extract intent and generate responses. Google's data handling is governed by their API terms. We do not send your queries to ESPN or Sleeper — only structured API calls are made.
+Your query text is sent to Google Gemini to extract intent and generate responses. Google's data handling is governed by the [Gemini API terms](https://ai.google.dev/gemini-api/terms). If the App is running on Gemini's free tier, Google may use submitted queries to improve its products — please don't include personal information in your questions. We do not send your queries to ESPN or Sleeper — only structured API calls are made.
 
 ---
 
