@@ -223,6 +223,24 @@ def find_team(query: Optional[str]) -> Optional[Dict[str, Any]]:
             return meta
     return None
 
+
+# ESPN and Sleeper agree on every team abbreviation except Washington.
+_ESPN_TO_SLEEPER_ABBR = {"WSH": "WAS"}
+
+
+def sleeper_team_abbr(team: Optional[str]) -> Optional[str]:
+    """Resolves a team name/nickname/abbreviation to Sleeper's abbreviation (e.g. 'MIN')."""
+    if not team:
+        return None
+    upper = team.strip().upper()
+    if upper in _ESPN_TO_SLEEPER_ABBR.values():
+        return upper
+    meta = find_team(team)
+    if not meta or not meta.get("abbr"):
+        return None
+    abbr = meta["abbr"].upper()
+    return _ESPN_TO_SLEEPER_ABBR.get(abbr, abbr)
+
 # ----------------------------------------------------
 # News & Scores (Conversational & Dynamic)
 # ----------------------------------------------------
@@ -500,7 +518,7 @@ def get_team_roster(team_name: str, position: Optional[str] = None) -> str:
     if not meta:
         return f"I couldn't find a team named '{team_name}'."
 
-    abbr = meta.get("abbr", "").upper()
+    abbr = sleeper_team_abbr(team_name) or ""
     display = meta.get("displayName", team_name)
 
     rosters = _ROSTERS_DATA.get("rosters", {})
@@ -583,7 +601,12 @@ def _ensure_player_cache():
             )
 
 
-def get_player_profile_smart(user_input: str) -> Union[str, Dict[str, Any]]:
+def get_player_profile_smart(user_input: str, team: Optional[str] = None) -> Union[str, Dict[str, Any]]:
+    """
+    Looks up a legend, prospect, or active player by name.
+    `team` (any team name/abbreviation) narrows same-name active players,
+    e.g. the Vikings WR vs the Browns LB named Justin Jefferson.
+    """
     _ensure_player_cache()
     q = user_input.lower().strip()
 
@@ -631,12 +654,12 @@ def get_player_profile_smart(user_input: str) -> Union[str, Dict[str, Any]]:
     if active_matches:
         matches = active_matches
 
-    # If a team hint is present in the original query, narrow further
-    team_hint = detect_team_from_query(q)
-    if team_hint:
-        hinted = [p for p in matches
-                  if team_hint.lower() in (p.get("team") or "").lower()
-                  or (p.get("team") or "").upper() in team_hint.upper()]
+    # Narrow by team — explicit argument first, else a team named in the query.
+    # Compare Sleeper abbreviations exactly; substring checks let free agents
+    # (team == "") match every hint.
+    team_abbr = sleeper_team_abbr(team or detect_team_from_query(q))
+    if team_abbr:
+        hinted = [p for p in matches if (p.get("team") or "").upper() == team_abbr]
         if hinted:
             matches = hinted
 

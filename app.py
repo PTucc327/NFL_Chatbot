@@ -232,6 +232,13 @@ if "terms_accepted" not in st.session_state:
     st.session_state["terms_accepted"] = False
 if "onboarding_done" not in st.session_state:
     st.session_state["onboarding_done"] = False
+# Player choices awaiting a click, and a query queued by that click. Kept in
+# session state so the Select buttons are re-rendered on the rerun their
+# click triggers — otherwise Streamlit drops the click.
+if "pending_selection" not in st.session_state:
+    st.session_state["pending_selection"] = None
+if "queued_query" not in st.session_state:
+    st.session_state["queued_query"] = None
 
 # ------------------------------------------------------------------
 # Consent Gate — shown once per session before any interaction.
@@ -370,10 +377,17 @@ def _load_team_data() -> dict:
 
 _TEAM_LOOKUP = _load_team_data()
 TEAM_NAMES = sorted(_TEAM_LOOKUP.keys())
+# Sleeper player records carry abbreviations ("MIN"); Washington is "WAS"
+# in Sleeper but "wsh" in ESPN's data.
+_ABBR_LOOKUP = {t["abbr"].upper(): t for t in _TEAM_LOOKUP.values()}
+_ABBR_LOOKUP["WAS"] = _ABBR_LOOKUP.get("WSH")
 
-def team_logo_url(display_name: str) -> str:
-    meta = _TEAM_LOOKUP.get(display_name or "")
-    abbr = (meta or {}).get("abbr", "")
+def _team_meta(name_or_abbr: str) -> dict:
+    key = name_or_abbr or ""
+    return _TEAM_LOOKUP.get(key) or _ABBR_LOOKUP.get(key.upper()) or {}
+
+def team_logo_url(name_or_abbr: str) -> str:
+    abbr = _team_meta(name_or_abbr).get("abbr", "")
     return f"https://a.espncdn.com/i/teamlogos/nfl/500/{abbr}.png" if abbr else ""
 
 # ------------------------------------------------------------------
@@ -628,7 +642,50 @@ for message in st.session_state.messages:
 # ------------------------------------------------------------------
 user_input = st.chat_input("Ex: 'How did the Giants do today?' or 'Tell me about Josh Allen'")
 
-final_query = sidebar_prompt or example_prompt or voice_input or user_input
+queued_query = st.session_state.pop("queued_query", None)
+final_query = queued_query or sidebar_prompt or example_prompt or voice_input or user_input
+
+
+def _render_pending_selection() -> None:
+    """Player cards + Select buttons for an ambiguous name. A click queues a
+    team-qualified query that runs through the normal chatbot pipeline."""
+    pending = st.session_state.get("pending_selection")
+    if not pending:
+        return
+    with st.chat_message("assistant", avatar="🏈"):
+        for idx, p in enumerate(pending):
+            meta = _team_meta(p.get("team", ""))
+            team_label = meta.get("displayName") or p.get("team") or "FA"
+            safe_name = html.escape(str(p.get("full_name", "Unknown")))
+            safe_team = html.escape(str(team_label))
+            safe_pos  = html.escape(str(p.get("position", "")))
+            logo = team_logo_url(p.get("team", ""))
+            logo_html = (
+                f'<img src="{logo}" width="40" alt="{safe_team} logo" '
+                f'style="display:block; margin:0 auto 4px auto;">' if logo else ""
+            )
+            st.markdown(
+                f'<div class="player-card">{logo_html}'
+                f'<div class="pname">{safe_name}</div>'
+                f'<div class="pmeta">{safe_team} · {safe_pos}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            p_id = p.get("player_id") or p.get("id") or idx
+            if st.button(f"Select {p.get('full_name', '')} ({p.get('team') or 'FA'})",
+                         key=f"sel_{p_id}", use_container_width=True):
+                st.session_state["pending_selection"] = None
+                st.session_state["last_mentioned"] = p.get("full_name")
+                where = f"{p.get('position', '')} for the {team_label}" if meta else "free agent"
+                st.session_state["queued_query"] = f"Tell me about {p.get('full_name')} ({where})"
+                st.rerun()
+
+
+if final_query:
+    # Any new question supersedes an unanswered player choice.
+    st.session_state["pending_selection"] = None
+else:
+    _render_pending_selection()
 
 # Enforce a hard input cap — prevents runaway Gemini token costs and prompt
 # injection via extremely long pasted text. 500 chars is well above any
@@ -707,37 +764,15 @@ if final_query:
 
             if player_list:
                 disambiguation_msg = response.get("message", "I found a few players with that name. Who did you mean?")
-                st.write(disambiguation_msg)
                 st.session_state.messages.append({"role": "assistant", "content": disambiguation_msg, "time": reply_time})
-
-                # Task 3 — vertical stack (no columns) so cards render on all viewports
-                for idx, p in enumerate(player_list):
-                    p_id = p.get("player_id") or p.get("id")
-                    logo = team_logo_url(p.get("team", ""))
-                    safe_name = html.escape(str(p.get("full_name", "Unknown")))
-                    safe_team = html.escape(str(p.get("team") or "FA"))
-                    safe_pos  = html.escape(str(p.get("position", "")))
-                    st.markdown(
-                        f'<div class="player-card">'
-                        f'<div class="pname">{safe_name}</div>'
-                        f'<div class="pmeta">{safe_team} · {safe_pos}</div>'
-                        f'</div>',
-                        unsafe_allow_html=True,
-                    )
-                    if logo:
-                        # Task 5 — alt text for accessibility
-                        st.markdown(
-                            f'<img src="{logo}" width="40" alt="{safe_team} logo" style="display:block; margin-bottom:4px;">',
-                            unsafe_allow_html=True,
-                        )
-                    if st.button("Select", key=f"sel_{p_id}", use_container_width=True):
-                        st.session_state["last_mentioned"] = p["full_name"]
-                        st.session_state.messages.append({
-                            "role": "user",
-                            "content": f"Show me the profile for {p['full_name']} on the {p.get('team')}",
-                            "time": datetime.datetime.now().strftime("%I:%M %p"),
-                        })
-                        st.rerun()
+                # Keep only the fields the cards need — the raw Sleeper
+                # record is large. Rerun so the cards render via
+                # _render_pending_selection, where their clicks survive.
+                st.session_state["pending_selection"] = [
+                    {k: p.get(k) for k in ("player_id", "full_name", "team", "position")}
+                    for p in player_list
+                ]
+                st.rerun()
             else:
                 fallback_msg = "I found multiple matches but had trouble loading the details. Try adding the team name to your search!"
                 st.warning(fallback_msg)

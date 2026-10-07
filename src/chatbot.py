@@ -350,7 +350,8 @@ def _handle_player(team, player, *_):
     name = player or team
     if not name:
         return "Which player?"
-    profile = get_player_profile_smart(name)
+    # Team narrows same-name players (e.g. after a disambiguation click).
+    profile = get_player_profile_smart(name, team=team if player else None)
     # Profile dicts carry their own structured data; chart is only appended
     # to plain-text responses where a sparkline adds meaningful context.
     return _maybe_attach_chart(profile, name)

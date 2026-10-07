@@ -753,3 +753,63 @@ class TestDetectTeamFromQuery:
         with patch.object(_client_mod, "fetch_json", return_value=FAKE_TEAMS_RESPONSE):
             result = _client_mod.detect_team_from_query("Who won the basketball game?")
         assert result is None
+
+
+# ─── Team-qualified player lookup (same-name disambiguation) ──────
+
+def _team_meta(team_id, name, abbr):
+    return {"id": team_id, "displayName": name, "abbr": abbr, "slug": "",
+            "schedule_url": ""}
+
+
+_JEFFERSON_TEAMS = {}
+for _m in (_team_meta("16", "Minnesota Vikings", "min"),
+           _team_meta("5", "Cleveland Browns", "cle"),
+           _team_meta("28", "Washington Commanders", "wsh")):
+    _JEFFERSON_TEAMS[_m["displayName"].lower()] = _m
+    _JEFFERSON_TEAMS[_m["abbr"]] = _m
+    _JEFFERSON_TEAMS[_m["id"]] = _m
+
+_JEFFERSONS = {
+    "6794x": {"player_id": "6794x", "full_name": "Justin Jefferson", "position": "WR",
+              "team": "MIN", "active": True, "years_exp": 6},
+    "9001": {"player_id": "9001", "full_name": "Justin Jefferson", "position": "LB",
+             "team": "CLE", "active": True, "years_exp": 2},
+    "9002": {"player_id": "9002", "full_name": "Justin Jefferson", "position": "S",
+             "team": None, "active": True, "years_exp": 1},
+}
+
+
+class TestTeamQualifiedProfile:
+    @pytest.fixture(autouse=True)
+    def jefferson_caches(self):
+        _client_mod._PLAYER_CACHE = _JEFFERSONS
+        _client_mod._TEAM_CACHE = _JEFFERSON_TEAMS
+        _client_mod._TEAM_CACHE_LAST = datetime.datetime.now().timestamp() + 9999
+        yield
+        _client_mod._TEAM_CACHE = {}
+        _client_mod._TEAM_CACHE_LAST = 0
+
+    def test_same_name_without_team_asks_which_one(self):
+        result = get_player_profile_smart("justin jefferson")
+        assert isinstance(result, dict) and result["type"] == "selection_required"
+        assert len(result["matches"]) == 3
+
+    def test_team_argument_selects_one_player(self):
+        with patch.object(_client_mod, "get_fantasy_player_stats", return_value="0 pts"):
+            result = get_player_profile_smart("justin jefferson", team="Minnesota Vikings")
+        assert isinstance(result, str)
+        assert "MIN" in result and "WR" in result
+
+    def test_free_agent_does_not_survive_team_filter(self):
+        # Regression: "" in "CLEVELAND BROWNS" was True, so free agents always matched.
+        with patch.object(_client_mod, "get_fantasy_player_stats", return_value="0 pts"):
+            result = get_player_profile_smart("justin jefferson", team="browns")
+        assert isinstance(result, str)
+        assert "CLE" in result and "LB" in result
+
+    def test_sleeper_abbr_maps_washington(self):
+        assert _client_mod.sleeper_team_abbr("Washington Commanders") == "WAS"
+        assert _client_mod.sleeper_team_abbr("WAS") == "WAS"
+        assert _client_mod.sleeper_team_abbr("vikings") == "MIN"
+        assert _client_mod.sleeper_team_abbr(None) is None
