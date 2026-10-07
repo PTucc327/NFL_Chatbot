@@ -601,6 +601,38 @@ def _ensure_player_cache():
             )
 
 
+def _find_players(name: str, team: Optional[str] = None,
+                  active_only: bool = True) -> List[tuple]:
+    """
+    Returns (player_id, record) candidates for a name, best first:
+    exact name matches before fuzzy ones, then Sleeper's search_rank
+    (lower = more prominent), so "Justin Jefferson" resolves to the
+    Vikings WR rather than whichever same-name player the dict yields first.
+    `team` (any team name/abbreviation) restricts results to that team.
+    """
+    _ensure_player_cache()
+    q = clean_query(name)
+    matches = [(pid, p) for pid, p in _PLAYER_CACHE.items()
+               if p.get("full_name") and is_fuzzy_match(q, p["full_name"])
+               and (p.get("active") or not active_only)]
+
+    team_abbr = sleeper_team_abbr(team)
+    if team_abbr:
+        on_team = [m for m in matches if (m[1].get("team") or "").upper() == team_abbr]
+        matches = on_team or matches
+
+    def rank(m):
+        exact = clean_query(m[1]["full_name"]) == q
+        return (not exact, m[1].get("search_rank") or 9_999_999)
+    return sorted(matches, key=rank)
+
+
+def _resolve_player(name: str, team: Optional[str] = None) -> Optional[tuple]:
+    """Best (player_id, record) match for a name, or None."""
+    matches = _find_players(name, team)
+    return matches[0] if matches else None
+
+
 def get_player_profile_smart(user_input: str, team: Optional[str] = None) -> Union[str, Dict[str, Any]]:
     """
     Looks up a legend, prospect, or active player by name.
@@ -665,7 +697,7 @@ def get_player_profile_smart(user_input: str, team: Optional[str] = None) -> Uni
 
     if len(matches) == 1:
         p = matches[0]
-        live_stats = get_fantasy_player_stats(p["full_name"])
+        live_stats = get_fantasy_player_stats(p["full_name"], team=p.get("team"))
         # Surface injury status inline on the profile
         injury_status = p.get("injury_status") or "Healthy"
         injury_part   = p.get("injury_body_part", "")
@@ -693,48 +725,37 @@ def get_player_profile_smart(user_input: str, team: Optional[str] = None) -> Uni
         "matches": matches[:5],  # cap at 5 buttons
     }
 
-def get_fantasy_player_stats(query_name: str) -> str:
+def get_fantasy_player_stats(query_name: str, team: Optional[str] = None) -> str:
     """Retrieves PPR fantasy points for a player using the correct NFL season year."""
-    _ensure_player_cache()
+    resolved = _resolve_player(query_name, team)
+    if not resolved:
+        return f"I'm not seeing any fantasy points recorded for {query_name} yet."
+    pid, p = resolved
+
     year = _current_nfl_season_year()
     stats = fetch_json(ENDPOINTS["sleeper_stats"].format(year=year))
-    q = clean_query(query_name)
-    
-    matches = []
-    for pid, p in _PLAYER_CACHE.items():
-        if is_fuzzy_match(q, p.get("full_name", "")):
-            p_stats = stats.get(pid, {})
-            pts = p_stats.get("pts_ppr", 0)
-            matches.append(f"{p.get('full_name')} ({p.get('position')}): **{pts} PPR Points**")
-    
-    if matches: return f"I took a look at the latest fantasy data—{matches[0]}!"
-    return f"I'm not seeing any fantasy points recorded for {query_name} yet."
+    if "__error" in stats:
+        return f"I couldn't reach the fantasy stats service for {p['full_name']} right now."
+
+    pts = stats.get(pid, {}).get("pts_ppr", 0)
+    return (f"I took a look at the latest fantasy data—{p['full_name']} "
+            f"({p.get('position')}, {p.get('team') or 'FA'}): **{pts} PPR Points**!")
 
 
 # ----------------------------------------------------
 # Improvement #2 — Injury Reports
 # ----------------------------------------------------
 
-def get_player_injury(player_name: str) -> str:
+def get_player_injury(player_name: str, team: Optional[str] = None) -> str:
     """
     Returns injury status, body part, practice participation, and notes
     directly from the Sleeper player cache — no extra API call needed.
     """
-    _ensure_player_cache()
-    q = clean_query(player_name)
-
-    matches = [p for p in _PLAYER_CACHE.values()
-               if p.get("full_name") and is_fuzzy_match(q, p["full_name"])]
-
-    # Prefer active players
-    active = [p for p in matches if p.get("active")]
-    if active:
-        matches = active
-
-    if not matches:
+    resolved = _resolve_player(player_name, team)
+    if not resolved:
         return f"I couldn't find injury information for '{player_name}'."
 
-    p = matches[0]
+    _, p = resolved
     name   = p.get("full_name", player_name)
     status = p.get("injury_status") or "Healthy"
     part   = p.get("injury_body_part")
@@ -764,26 +785,18 @@ def get_player_injury(player_name: str) -> str:
 # Improvement #3 — Weekly Player Stats
 # ----------------------------------------------------
 
-def get_player_weekly_stats(player_name: str, num_weeks: int = 5) -> str:
+def get_player_weekly_stats(player_name: str, num_weeks: int = 5,
+                            team: Optional[str] = None) -> str:
     """
     Returns the last N weeks of game stats for a player from Sleeper.
     Surfaces passing, rushing, and receiving lines depending on position.
     """
-    _ensure_player_cache()
     year = _current_nfl_season_year()
-    q = clean_query(player_name)
-
-    # Find the player record
-    matches = [p for p in _PLAYER_CACHE.values()
-               if p.get("full_name") and is_fuzzy_match(q, p["full_name"])
-               and p.get("active")]
-    if not matches:
+    resolved = _resolve_player(player_name, team)
+    if not resolved:
         return f"No weekly stats found for '{player_name}'."
 
-    player = matches[0]
-    pid    = player.get("player_id") or next(
-        (k for k, v in _PLAYER_CACHE.items() if v is player), None
-    )
+    pid, player = resolved
     pos    = player.get("position", "")
     name   = player.get("full_name", player_name)
 
@@ -849,23 +862,18 @@ def get_fantasy_sit_start(player_name: str, opponent_team: Optional[str] = None)
     Builds a sit/start data package: recent weekly stats + injury status +
     upcoming matchup. Gemini uses this to generate the actual recommendation.
     """
-    _ensure_player_cache()
-    q = clean_query(player_name)
-
-    matches = [p for p in _PLAYER_CACHE.values()
-               if p.get("full_name") and is_fuzzy_match(q, p["full_name"])
-               and p.get("active")]
-    if not matches:
+    resolved = _resolve_player(player_name)
+    if not resolved:
         return f"I couldn't find fantasy data for '{player_name}'."
 
-    player = matches[0]
+    _, player = resolved
     name   = player.get("full_name", player_name)
-    team   = player.get("team", "FA")
+    team   = player.get("team") or "FA"
     pos    = player.get("position", "?")
 
-    # Gather components
-    weekly  = get_player_weekly_stats(name, num_weeks=4)
-    injury  = get_player_injury(name)
+    # Gather components — pass the team so each lookup stays on this player
+    weekly  = get_player_weekly_stats(name, num_weeks=4, team=player.get("team"))
+    injury  = get_player_injury(name, team=player.get("team"))
     matchup = get_next_game(team) if team != "FA" else "No upcoming game found (free agent)."
 
     opp_context = f" vs {opponent_team}" if opponent_team else ""
@@ -902,17 +910,13 @@ def _get_player_data_block(name: str) -> str:
     Builds a stat + injury + depth chart block for a single player.
     Used internally by comparison and trade functions.
     """
-    _ensure_player_cache()
-    q = clean_query(name)
-    matches = [p for p in _PLAYER_CACHE.values()
-               if p.get("full_name") and is_fuzzy_match(q, p["full_name"])
-               and p.get("active")]
-    if not matches:
+    resolved = _resolve_player(name)
+    if not resolved:
         return f"No data found for '{name}'."
 
-    p = matches[0]
+    _, p = resolved
     full   = p.get("full_name", name)
-    team   = p.get("team", "FA")
+    team   = p.get("team") or "FA"
     pos    = p.get("position", "?")
     exp    = p.get("years_exp", "?")
     inj    = p.get("injury_status") or "Healthy"
@@ -925,8 +929,8 @@ def _get_player_data_block(name: str) -> str:
         ordinal = {1: "Starter", 2: "Backup", 3: "3rd string"}.get(int(depth_order), f"#{depth_order}")
         depth_str = f" | Depth: {ordinal} {depth_pos}"
 
-    weekly = get_player_weekly_stats(full, num_weeks=4)
-    season = get_fantasy_player_stats(full)
+    weekly = get_player_weekly_stats(full, num_weeks=4, team=p.get("team"))
+    season = get_fantasy_player_stats(full, team=p.get("team"))
 
     return (
         f"**{full}** ({pos}, {team}, {exp} yrs exp{depth_str})\n"
@@ -971,15 +975,10 @@ def get_trade_analysis(player_give: str, player_receive: str) -> str:
         block_receive = future_receive.result()
 
     # Get next game for each to add schedule context
-    _ensure_player_cache()
-
     def _next_game_for(name: str) -> str:
-        q = clean_query(name)
-        matches = [p for p in _PLAYER_CACHE.values()
-                   if p.get("full_name") and is_fuzzy_match(q, p["full_name"])
-                   and p.get("active")]
-        if matches and matches[0].get("team"):
-            return get_next_game(matches[0]["team"])
+        resolved = _resolve_player(name)
+        if resolved and resolved[1].get("team"):
+            return get_next_game(resolved[1]["team"])
         return "Schedule unavailable."
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
@@ -1127,7 +1126,7 @@ def get_waiver_recommendations(position: Optional[str] = None, top_n: int = 5) -
 # Weekly PPR Chart Data (sparkline support)
 # ----------------------------------------------------
 
-def get_player_chart_data(player_name: str) -> Optional[Dict[str, Any]]:
+def get_player_chart_data(player_name: str, team: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
     Returns {"weeks": [...], "pts": [...]} for a weekly PPR sparkline chart,
     or None if fewer than 4 weeks of data are available.
@@ -1136,17 +1135,11 @@ def get_player_chart_data(player_name: str) -> Optional[Dict[str, Any]]:
     this function is called from within a ThreadPoolExecutor in chatbot.py,
     so spinning up a nested pool would create unnecessary overhead.
     """
-    _ensure_player_cache()
-    q = clean_query(player_name)
-
-    matches = [
-        (pid, p) for pid, p in _PLAYER_CACHE.items()
-        if p.get("full_name") and is_fuzzy_match(q, p["full_name"]) and p.get("active")
-    ]
-    if not matches:
+    resolved = _resolve_player(player_name, team)
+    if not resolved:
         return None
 
-    pid = matches[0][0]
+    pid = resolved[0]
     year = _current_nfl_season_year()
 
     today = datetime.datetime.now()
@@ -1193,27 +1186,14 @@ def get_player_history(
         opponent_team: Optional team name to filter to games vs that team only.
         season_year:   4-digit season year (e.g. 2024). Defaults to current season.
     """
-    _ensure_player_cache()
     year = season_year or _current_nfl_season_year()
-    q = clean_query(player_name)
-
-    # Find active player record
-    matches = [
-        p for p in _PLAYER_CACHE.values()
-        if p.get("full_name") and is_fuzzy_match(q, p["full_name"]) and p.get("active")
-    ]
-    if not matches:
+    resolved = _resolve_player(player_name)
+    if not resolved:
         return f"No player found matching '{player_name}'."
 
-    player = matches[0]
+    pid, player = resolved
     name   = player.get("full_name", player_name)
     pos    = player.get("position", "")
-    pid    = player.get("player_id") or next(
-        (k for k, v in _PLAYER_CACHE.items() if v is player), None
-    )
-
-    if not pid:
-        return f"Could not resolve player ID for '{name}'."
 
     # Fetch all 18 weeks concurrently
     def _fetch_week(week: int):

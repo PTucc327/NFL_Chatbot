@@ -772,9 +772,9 @@ for _m in (_team_meta("16", "Minnesota Vikings", "min"),
 
 _JEFFERSONS = {
     "6794x": {"player_id": "6794x", "full_name": "Justin Jefferson", "position": "WR",
-              "team": "MIN", "active": True, "years_exp": 6},
+              "team": "MIN", "active": True, "years_exp": 6, "search_rank": 12},
     "9001": {"player_id": "9001", "full_name": "Justin Jefferson", "position": "LB",
-             "team": "CLE", "active": True, "years_exp": 2},
+             "team": "CLE", "active": True, "years_exp": 2, "search_rank": 9999999},
     "9002": {"player_id": "9002", "full_name": "Justin Jefferson", "position": "S",
              "team": None, "active": True, "years_exp": 1},
 }
@@ -813,3 +813,19 @@ class TestTeamQualifiedProfile:
         assert _client_mod.sleeper_team_abbr("WAS") == "WAS"
         assert _client_mod.sleeper_team_abbr("vikings") == "MIN"
         assert _client_mod.sleeper_team_abbr(None) is None
+
+    def test_resolver_prefers_most_prominent_same_name_player(self):
+        # Regression: the LB's stats were shown on the Vikings WR's profile.
+        pid, p = _client_mod._resolve_player("Justin Jefferson")
+        assert p["team"] == "MIN" and p["position"] == "WR"
+
+    def test_season_stats_use_resolved_player(self):
+        stats = {"6794x": {"pts_ppr": 201.4}, "9001": {"pts_ppr": 0}}
+        with patch.object(_client_mod, "fetch_json", return_value=stats):
+            assert "201.4" in get_fantasy_player_stats("Justin Jefferson")
+            assert "0 PPR" in get_fantasy_player_stats("Justin Jefferson", team="CLE")
+
+    def test_season_stats_network_error_is_not_zero_points(self):
+        with patch.object(_client_mod, "fetch_json", return_value={"__error": "timeout"}):
+            result = get_fantasy_player_stats("Justin Jefferson")
+        assert "couldn't reach" in result

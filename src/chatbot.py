@@ -317,19 +317,19 @@ def _extract_intent(user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
 # -------------------------------------------------------
 
 
-def _build_chart_data(player_name: str) -> Optional[Dict[str, Any]]:
+def _build_chart_data(player_name: str, team: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
     Delegates to api_client.get_player_chart_data — returns weekly PPR data
     for a sparkline chart, or None if insufficient data.
     """
     try:
-        return get_player_chart_data(player_name)
+        return get_player_chart_data(player_name, team=team)
     except Exception as e:
         logger.warning(f"chart_data build failed for {player_name}: {e}")
         return None
 
 
-def _maybe_attach_chart(result: Any, player_name: str) -> Any:
+def _maybe_attach_chart(result: Any, player_name: str, team: Optional[str] = None) -> Any:
     """Attach chart_data to a plain-text result if sparkline data is available.
 
     Chart is only appended to string responses — structured dicts carry their
@@ -337,7 +337,7 @@ def _maybe_attach_chart(result: Any, player_name: str) -> Any:
     """
     if not isinstance(result, str):
         return result
-    chart = _build_chart_data(player_name)
+    chart = _build_chart_data(player_name, team)
     return {"_text": result, "chart_data": chart} if chart else result
 
 
@@ -354,7 +354,7 @@ def _handle_player(team, player, *_):
     profile = get_player_profile_smart(name, team=team if player else None)
     # Profile dicts carry their own structured data; chart is only appended
     # to plain-text responses where a sparkline adds meaningful context.
-    return _maybe_attach_chart(profile, name)
+    return _maybe_attach_chart(profile, name, team if player else None)
 
 
 def _handle_fantasy(team, player, _player_b, raw_query, *_):
