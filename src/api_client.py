@@ -48,6 +48,8 @@ ENDPOINTS = {
     "sleeper_players":    "https://api.sleeper.app/v1/players/nfl",
     "sleeper_stats":      "https://api.sleeper.app/v1/stats/nfl/regular/{year}",
     "sleeper_stats_week": "https://api.sleeper.app/v1/stats/nfl/regular/{year}/{week}",
+    "sleeper_trending_add": "https://api.sleeper.app/v1/players/nfl/trending/add",
+    "sleeper_state":      "https://api.sleeper.app/v1/state/nfl",
 }
 
 def _current_nfl_season_year() -> int:
@@ -59,6 +61,33 @@ def _current_nfl_season_year() -> int:
     now = datetime.datetime.now()
     # NFL season data is available from September onward
     return now.year if now.month >= 9 else now.year - 1
+
+
+_WEEK_CACHE: Dict[str, Any] = {"week": None, "at": 0.0}
+_WEEK_CACHE_TTL = 60 * 60  # weeks roll over once a week; an hour is plenty
+
+
+def _current_nfl_week() -> int:
+    """
+    Current regular-season week (1-18) from Sleeper's /state/nfl, which flips
+    to the next week on Tuesday. Falls back to counting weeks from the
+    Tuesday before kickoff (the Thursday after Labor Day).
+    """
+    if _WEEK_CACHE["week"] and time.time() - _WEEK_CACHE["at"] < _WEEK_CACHE_TTL:
+        return _WEEK_CACHE["week"]
+
+    state = fetch_json(ENDPOINTS["sleeper_state"])
+    week = state.get("week") if state.get("season_type") == "regular" else None
+    if not isinstance(week, int) or not 1 <= week <= 18:
+        year = _current_nfl_season_year()
+        labor_day = datetime.date(year, 9, 1)
+        labor_day += datetime.timedelta(days=(0 - labor_day.weekday()) % 7)
+        week_one_tuesday = labor_day + datetime.timedelta(days=1)
+        days = (datetime.date.today() - week_one_tuesday).days
+        week = min(max(1, days // 7 + 1), 18)
+
+    _WEEK_CACHE.update(week=week, at=time.time())
+    return week
 
 # Mapping for nicknames to ensure robust entity recognition
 NICKNAMES = {
@@ -806,10 +835,8 @@ def get_player_weekly_stats(player_name: str, num_weeks: int = 5,
         data = fetch_json(url)
         return week, data.get(pid, {}) if "__error" not in data else {}
 
-    # Determine current week (approximate from today's date)
-    today = datetime.datetime.now()
-    season_start = datetime.datetime(today.year if today.month >= 9 else today.year - 1, 9, 1)
-    current_week = min(max(1, int((today - season_start).days // 7) + 1), 18)
+    # Current week from Sleeper (flips to the next week on Tuesday)
+    current_week = _current_nfl_week()
     weeks_to_fetch = list(range(max(1, current_week - num_weeks), current_week + 1))
 
     week_stats = {}
@@ -1005,12 +1032,13 @@ _WAIVER_POSITIONS = {"QB", "RB", "WR", "TE"}
 
 def get_waiver_recommendations(position: Optional[str] = None, top_n: int = 5) -> str:
     """
-    Ranks unclaimed free agents by recent PPR performance and returns the
-    top picks with injury status, upcoming matchup, and schedule context
-    for Gemini to analyse.
+    Returns the most-added players across Sleeper fantasy leagues (the
+    standard waiver-wire signal) with recent weekly PPR, injury status,
+    and upcoming matchup for Gemini to analyse.
 
-    Ranking uses a weighted recent PPR score (most recent week × 3, prior
-    weeks × 2 and × 1) so hot-streak players surface over stale producers.
+    Candidates come from Sleeper's trending-adds feed, ranked by add volume
+    over the last 48 hours. (Unsigned NFL free agents can't be used — they
+    score no fantasy points, and there's no league to check rosters against.)
 
     Args:
         position: Optional filter — "QB", "RB", "WR", or "TE".
@@ -1023,26 +1051,28 @@ def get_waiver_recommendations(position: Optional[str] = None, top_n: int = 5) -
     if pos_filter and pos_filter not in _WAIVER_POSITIONS:
         return f"'{position}' isn't a recognised fantasy position. Try QB, RB, WR, or TE."
 
-    # ── Step 1: identify free agents ─────────────────────────────
-    free_agents = [
-        p for p in _PLAYER_CACHE.values()
-        if p.get("active")
-        and p.get("position") in _WAIVER_POSITIONS
-        and not p.get("team")
-        and p.get("full_name")
-        and (pos_filter is None or p.get("position") == pos_filter)
-    ]
+    # ── Step 1: trending adds across Sleeper leagues ──────────────
+    trending = fetch_json(ENDPOINTS["sleeper_trending_add"],
+                          params={"lookback_hours": 48, "limit": 100})
+    if not isinstance(trending, list):
+        return "I couldn't reach the waiver-wire trends right now — try again in a bit."
 
-    if not free_agents:
+    candidates = []
+    for item in trending:
+        pid = str(item.get("player_id", ""))
+        p = _PLAYER_CACHE.get(pid)
+        if (p and p.get("active") and p.get("full_name")
+                and p.get("position") in _WAIVER_POSITIONS
+                and (pos_filter is None or p.get("position") == pos_filter)):
+            candidates.append((pid, p, item.get("count", 0)))
+
+    if not candidates:
         label = f"{pos_filter} " if pos_filter else ""
-        return f"No {label}free agents found in the player cache right now."
+        return f"No {label}players are trending on waivers right now."
+    top = candidates[:top_n]  # feed is already sorted by add count
 
     # ── Step 2: fetch last 3 weeks concurrently ───────────────────
-    today        = datetime.datetime.now()
-    season_start = datetime.datetime(
-        today.year if today.month >= 9 else today.year - 1, 9, 1
-    )
-    current_week = min(max(1, int((today - season_start).days // 7) + 1), 18)
+    current_week = _current_nfl_week()
     recent_weeks = list(range(max(1, current_week - 3), current_week + 1))
 
     def _fetch_week_data(week: int) -> tuple[int, dict]:
@@ -1055,36 +1085,7 @@ def get_waiver_recommendations(position: Optional[str] = None, top_n: int = 5) -
         for week, data in pool.map(_fetch_week_data, recent_weeks):
             week_data[week] = data
 
-    # ── Step 3: score by weighted recent PPR ─────────────────────
-    scored = []
-    for p in free_agents:
-        pid = p.get("player_id") or next(
-            (k for k, v in _PLAYER_CACHE.items() if v is p), None
-        )
-        if not pid:
-            continue
-
-        recent_pts = [
-            week_data[w].get(pid, {}).get("pts_ppr", 0)
-            for w in recent_weeks
-            if week_data.get(w)
-        ]
-        if not any(recent_pts):
-            continue
-
-        weights  = list(range(1, len(recent_pts) + 1))
-        weighted = sum(pt * w for pt, w in zip(recent_pts, weights))
-        total    = sum(recent_pts)
-        scored.append((weighted, total, p, pid, recent_pts))
-
-    if not scored:
-        label = f"{pos_filter} " if pos_filter else ""
-        return f"No {label}free agents have recorded fantasy points recently."
-
-    scored.sort(key=lambda x: x[0], reverse=True)
-    top = scored[:top_n]
-
-    # ── Step 4: fetch next game for each candidate (schedule difficulty) ──
+    # ── Step 3: next game for each candidate (schedule context) ──
     def _next_game_for_player(p: dict) -> str:
         """Returns the next game string for a player's team, or 'Free agent'."""
         team = p.get("team")
@@ -1096,26 +1097,29 @@ def get_waiver_recommendations(position: Optional[str] = None, top_n: int = 5) -
             return "Schedule unavailable"
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(top), 5)) as pool:
-        schedules = list(pool.map(lambda item: _next_game_for_player(item[2]), top))
+        schedules = list(pool.map(lambda item: _next_game_for_player(item[1]), top))
 
-    # ── Step 5: build output block ────────────────────────────────
+    # ── Step 4: build output block ────────────────────────────────
     label = f"{pos_filter} " if pos_filter else ""
-    lines = [f"🏆 **Top {len(top)} {label}Waiver Wire Targets (Recent Trend + Matchup)**\n"]
+    lines = [f"🏆 **Top {len(top)} {label}Waiver Wire Targets "
+             f"(most added across Sleeper leagues, last 48 hrs)**\n"]
 
-    for rank, ((weighted, total, p, pid, recent_pts), schedule) in enumerate(
-        zip(top, schedules), 1
-    ):
+    for rank, ((pid, p, adds), schedule) in enumerate(zip(top, schedules), 1):
         name     = p.get("full_name")
         pos      = p.get("position", "?")
+        team     = p.get("team") or "FA"
         inj      = p.get("injury_status") or "Healthy"
         inj_note = f" ⚠️ {inj}" if inj != "Healthy" else ""
 
-        wk_labels  = [f"Wk {w}: {pt:.1f}" for w, pt in zip(recent_weeks, recent_pts)]
-        recent_str = " | ".join(wk_labels)
+        # Only weeks with data, so labels stay aligned with their points.
+        recent = [(w, week_data[w].get(pid, {}).get("pts_ppr", 0))
+                  for w in recent_weeks if week_data.get(w)]
+        recent_str = " | ".join(f"Wk {w}: {pt:.1f}" for w, pt in recent) or "no games yet"
+        total = sum(pt for _, pt in recent)
 
         lines.append(
-            f"**{rank}. {name}** ({pos}){inj_note}\n"
-            f"   Recent: {recent_str} → **{total:.1f} pts last {len(recent_pts)} wks**\n"
+            f"**{rank}. {name}** ({pos}, {team}){inj_note} — added in {adds:,} leagues\n"
+            f"   Recent: {recent_str} → **{total:.1f} pts last {len(recent)} wks**\n"
             f"   Next: {schedule}"
         )
 
@@ -1142,9 +1146,7 @@ def get_player_chart_data(player_name: str, team: Optional[str] = None) -> Optio
     pid = resolved[0]
     year = _current_nfl_season_year()
 
-    today = datetime.datetime.now()
-    season_start = datetime.datetime(today.year if today.month >= 9 else today.year - 1, 9, 1)
-    current_week = min(max(1, int((today - season_start).days // 7) + 1), 18)
+    current_week = _current_nfl_week()
 
     week_pts: Dict[int, float] = {}
     for week in range(1, current_week + 1):

@@ -247,6 +247,19 @@ FAKE_WEEK_STATS = {
 }
 
 
+FAKE_TRENDING = [
+    {"player_id": "fa_002", "count": 900},
+    {"player_id": "fa_001", "count": 500},
+    {"player_id": "fa_003", "count": 300},
+    {"player_id": "unknown_id", "count": 100},
+]
+
+
+def _waiver_fetch(url, params=None, headers=None):
+    """Routes the trending-adds call and weekly-stats calls to fake data."""
+    return FAKE_TRENDING if "trending" in url else FAKE_WEEK_STATS
+
+
 class TestGetWaiverRecommendations:
     @pytest.fixture(autouse=True)
     def inject_fa_cache(self):
@@ -256,33 +269,42 @@ class TestGetWaiverRecommendations:
         _client_mod._PLAYER_CACHE      = {}
         _client_mod._PLAYER_CACHE_LAST = 0
 
-    def test_returns_players_with_recent_points(self):
-        with patch.object(_client_mod, "fetch_json", return_value=FAKE_WEEK_STATS):
+    def test_returns_trending_players(self):
+        with patch.object(_client_mod, "fetch_json", side_effect=_waiver_fetch):
             result = _client_mod.get_waiver_recommendations()
         assert "DeAndre Hopkins" in result
 
+    def test_ranked_by_add_count(self):
+        with patch.object(_client_mod, "fetch_json", side_effect=_waiver_fetch):
+            result = _client_mod.get_waiver_recommendations()
+        assert result.index("Odell Beckham Jr") < result.index("DeAndre Hopkins")
+        assert "900" in result
+
     def test_position_filter_wr(self):
-        with patch.object(_client_mod, "fetch_json", return_value=FAKE_WEEK_STATS):
+        with patch.object(_client_mod, "fetch_json", side_effect=_waiver_fetch):
             result = _client_mod.get_waiver_recommendations(position="WR")
         assert "WR" in result
         # RB should not appear in a WR-only query
         assert "Cam Akers" not in result
 
     def test_injured_player_flagged(self):
-        with patch.object(_client_mod, "fetch_json", return_value=FAKE_WEEK_STATS):
+        with patch.object(_client_mod, "fetch_json", side_effect=_waiver_fetch):
             result = _client_mod.get_waiver_recommendations()
-        # Questionable player should show injury warning
-        if "Odell Beckham Jr" in result:
-            assert "Questionable" in result or "⚠️" in result
+        assert "Questionable" in result
 
     def test_invalid_position_returns_message(self):
         result = _client_mod.get_waiver_recommendations(position="QB1")
         assert "recognised" in result.lower() or "not" in result.lower()
 
-    def test_output_has_ranking_header(self):
-        with patch.object(_client_mod, "fetch_json", return_value=FAKE_WEEK_STATS):
+    def test_trending_feed_error_returns_message(self):
+        with patch.object(_client_mod, "fetch_json", return_value={"__error": "timeout"}):
             result = _client_mod.get_waiver_recommendations()
-        assert "Waiver Wire" in result or "waiver" in result.lower()
+        assert "couldn't reach" in result
+
+    def test_output_has_ranking_header(self):
+        with patch.object(_client_mod, "fetch_json", side_effect=_waiver_fetch):
+            result = _client_mod.get_waiver_recommendations()
+        assert "Waiver Wire" in result
 
 
 # ─── Shared ESPN-shaped payloads ──────────────────────────────────
@@ -829,3 +851,36 @@ class TestTeamQualifiedProfile:
         with patch.object(_client_mod, "fetch_json", return_value={"__error": "timeout"}):
             result = get_fantasy_player_stats("Justin Jefferson")
         assert "couldn't reach" in result
+
+
+# ─── _current_nfl_week ────────────────────────────────────────────
+
+class TestCurrentNflWeek:
+    @pytest.fixture(autouse=True)
+    def clear_week_cache(self):
+        _client_mod._WEEK_CACHE.update(week=None, at=0.0)
+        yield
+        _client_mod._WEEK_CACHE.update(week=None, at=0.0)
+
+    def test_uses_sleeper_state(self):
+        state = {"week": 5, "season_type": "regular", "season": "2026"}
+        with patch.object(_client_mod, "fetch_json", return_value=state):
+            assert _client_mod._current_nfl_week() == 5
+
+    def test_falls_back_to_calendar_on_error(self):
+        # 2026: Labor Day Sep 7, so the Tuesday after Week 4 (Oct 6) is Week 5.
+        class FakeDate(datetime.date):
+            @classmethod
+            def today(cls):
+                return cls(2026, 10, 6)
+        with patch.object(_client_mod, "fetch_json", return_value={"__error": "x"}), \
+             patch.object(_client_mod, "_current_nfl_season_year", return_value=2026), \
+             patch.object(_client_mod.datetime, "date", FakeDate):
+            assert _client_mod._current_nfl_week() == 5
+
+    def test_result_is_cached(self):
+        state = {"week": 7, "season_type": "regular"}
+        with patch.object(_client_mod, "fetch_json", return_value=state) as mock_fetch:
+            _client_mod._current_nfl_week()
+            _client_mod._current_nfl_week()
+        assert mock_fetch.call_count == 1
