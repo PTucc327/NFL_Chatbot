@@ -1,0 +1,11 @@
+[theme]
+# Matches the custom dark styling in app.py; the default light theme
+# renders chat text dark-on-dark.
+base = "dark"
+primaryColor = "#2f6fed"
+
+[server]
+headless = true
+
+[browser]
+gatherUsageStats = false
