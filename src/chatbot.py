@@ -54,6 +54,7 @@ from src.api_client import (
     get_league_leaders,
     get_box_score,
     get_playoff_picture,
+    get_team_rankings,
     get_player_team,
     current_nfl_season_year,
     current_nfl_week,
@@ -83,7 +84,8 @@ VALID_POSITIONS = {"QB", "RB", "WR", "TE", "K", "DE", "DT", "LB", "CB", "S"}
 _WAIVER_POSITIONS = {"QB", "RB", "WR", "TE"}
 
 # Intents answered at team level; a named player's team fills in when absent.
-_TEAM_LEVEL_INTENTS = {"schedule", "last_game", "box_score", "odds", "scores", "standings", "news"}
+_TEAM_LEVEL_INTENTS = {"schedule", "last_game", "box_score", "odds", "scores", "standings",
+                       "news", "team_stats"}
 
 # Keywords that indicate a sit/start question rather than a raw stats lookup.
 _SIT_START_KEYWORDS = frozenset({"start", "sit", "bench", "lineup", "waiver", "should i"})
@@ -421,6 +423,9 @@ Allowed intents (pick ALL that apply — multi-intent is supported):
   box_score   — details of a specific game that has started or finished: box score,
                 recap, "how did X beat Y", "who scored", "game stats", "what
                 happened in the game", live in-game stats
+  team_stats  — how a TEAM is doing statistically: offense/defense rankings,
+                "how's the Bills defense", "best run defense in the league",
+                "which team scores the most", "Eagles offense stats"
   leaders     — league or position leaders and rankings ("who leads in passing
                 yards", "top 5 fantasy QBs", "most receiving TDs")
   player      — player profile, career stats, or scouting report
@@ -656,6 +661,33 @@ def _handle_playoffs(team, _player, _player_b, raw_query, *_):
     return result
 
 
+# Most specific first: "run defense" must win over "defense".
+_TEAM_FOCUS_PATTERNS = (
+    (re.compile(r"\b(run|rush(ing)?) d(efen[cs]e)?\b|against the run", re.I), "rush_defense"),
+    (re.compile(r"\bpass(ing)? d(efen[cs]e)?\b|secondary|against the pass", re.I), "pass_defense"),
+    (re.compile(r"\bsacks?\b|pass rush", re.I), "sacks"),
+    (re.compile(r"turnover|takeaway", re.I), "turnovers"),
+    (re.compile(r"third down|3rd down", re.I), "third_down"),
+    (re.compile(r"red ?zone", re.I), "red_zone"),
+    (re.compile(r"\bdefen[cs]e\b|points allowed", re.I), "defense"),
+    (re.compile(r"\b(rushing|run game|ground game)\b", re.I), "rushing"),
+    (re.compile(r"\b(passing|pass offense|air attack)\b", re.I), "passing"),
+    (re.compile(r"\boffen[cs]e\b|scor", re.I), "offense"),
+)
+
+
+def _team_focus(text: str) -> Optional[str]:
+    return next((focus for rx, focus in _TEAM_FOCUS_PATTERNS if rx.search(text or "")), None)
+
+
+def _handle_team_stats(team, _player, _player_b, raw_query, *_):
+    # With a team, the full profile (the formatter focuses on what was asked);
+    # without one, a league leaderboard for the stat the question is about.
+    if team:
+        return get_team_rankings(team)
+    return get_team_rankings(focus=_team_focus(raw_query))
+
+
 def _handle_box_score(team, _player, _player_b, _raw_query, _season,
                       opponent=None, _stat=None, week=None, *_):
     if not team:
@@ -688,6 +720,7 @@ _INTENT_DISPATCH: Dict[str, IntentHandler] = {
     "schedule":    _handle_schedule,
     "leaders":     _handle_leaders,
     "box_score":   _handle_box_score,
+    "team_stats":  _handle_team_stats,
     "injury":      lambda t, p, *_: get_player_injury(p or t) if (p or t) else "Which player's injury status?",
     "odds":        lambda t, *_: get_game_odds(t) if t else "Which team's betting lines?",
     "player":      _handle_player,
@@ -793,6 +826,9 @@ Guidelines:
 - For player comparisons: highlight the key statistical and contextual differences.
 - For trade advice: give a clear verdict (Accept/Decline/Counter) first, then reasoning.
 - For waiver wire: list players in rank order, give a one-line reason for each pickup.
+- For team rankings: answer the part asked about (offense, defense, run defense…)
+  using the values and ranks given; rank 1 is the best of 32. Name a strength or
+  weakness when it explains the team's record.
 - For box scores: write a short game recap — final score and where it was played
   first, then the turning points from the scoring plays, the standout performers,
   and the team stat that decided it (turnovers, 3rd downs, red zone). Keep the
@@ -935,7 +971,8 @@ def _update_conv_state(parsed: Dict[str, Any],
     # discussion).  If that behaviour ever needs to change, add those intents
     # to the set below.
     if intents & {"scores", "standings", "news", "league_news", "schedule",
-                  "last_game", "box_score", "leaders", "playoffs", "injury", "odds", "roster"}:
+                  "last_game", "box_score", "leaders", "playoffs", "team_stats",
+                  "injury", "odds", "roster"}:
         return {}
 
     return current_state  # preserve state for ambiguous intents

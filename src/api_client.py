@@ -51,6 +51,7 @@ ENDPOINTS = {
     "sleeper_trending_add": "https://api.sleeper.app/v1/players/nfl/trending/add",
     "sleeper_state":      "https://api.sleeper.app/v1/state/nfl",
     "summary":        "https://site.api.espn.com/apis/site/v2/sports/football/nfl/summary",
+    "team_stats":     "https://site.api.espn.com/apis/site/v2/sports/football/nfl/teams/{team_id}/statistics",
 }
 
 def _current_nfl_season_year() -> int:
@@ -942,6 +943,170 @@ def get_box_score(team_name: str, opponent: Optional[str] = None,
             out.append(f"- Q{q} {clock} {team_abbr}: {sp.get('text', '')} "
                        f"({abbr(away)} {sp.get('awayScore')}-{sp.get('homeScore')} {abbr(home)})")
     return "\n".join(out)
+
+
+# ----------------------------------------------------
+# Team Rankings (offense / defense)
+# ----------------------------------------------------
+# ESPN's per-team statistics give a team's own season stats and its
+# opponents' stats (= what the defense allowed). ESPN's own ranks are
+# incomplete and their direction undocumented, so ranks are computed here
+# across all 32 teams: rank 1 is always the best (most scored, least allowed).
+_TEAM_STATS_TTL = 60 * 60 * 6
+_TEAM_STATS_CACHE: Dict[str, Any] = {"at": 0.0, "data": None}
+_TEAM_STATS_LOCK = threading.Lock()
+
+# (key, label, side, ESPN stat name, higher_is_better, is_percent)
+# side "own" = the team's stats, "opp" = its opponents' stats against it.
+_TEAM_METRICS = (
+    ("pts",        "Points per game",           "own", "totalPointsPerGame",     True,  False),
+    ("yds",        "Yards per game",            "own", "yardsPerGame",           True,  False),
+    ("pass",       "Passing yards per game",    "own", "netPassingYardsPerGame", True,  False),
+    ("rush",       "Rushing yards per game",    "own", "rushingYardsPerGame",    True,  False),
+    ("third",      "3rd down conversion %",     "own", "thirdDownConvPct",       True,  True),
+    ("redzone",    "Red zone scoring %",        "own", "redzoneScoringPct",      True,  True),
+    ("sacked",     "Sacks allowed",             "own", "sacks",                  False, False),
+    ("giveaways",  "Giveaways",                 "own", "totalGiveaways",         False, False),
+    ("pts_allowed",  "Points allowed per game",       "opp", "totalPointsPerGame",     False, False),
+    ("yds_allowed",  "Yards allowed per game",        "opp", "yardsPerGame",           False, False),
+    ("pass_allowed", "Passing yards allowed per game", "opp", "netPassingYardsPerGame", False, False),
+    ("rush_allowed", "Rushing yards allowed per game", "opp", "rushingYardsPerGame",    False, False),
+    ("third_allowed", "Opponent 3rd down %",          "opp", "thirdDownConvPct",       False, True),
+    ("sacks",        "Sacks",                         "opp", "sacks",                  True,  False),
+    ("takeaways",    "Takeaways",                     "own", "totalTakeaways",         True,  False),
+    ("to_diff",      "Turnover differential",         "own", "turnOverDifferential",   True,  False),
+)
+_OFFENSE_KEYS = ("pts", "yds", "pass", "rush", "third", "redzone", "sacked", "giveaways")
+_DEFENSE_KEYS = ("pts_allowed", "yds_allowed", "pass_allowed", "rush_allowed",
+                 "third_allowed", "sacks", "takeaways")
+
+# Leaderboard focus -> metric key ("best run defense" -> rush_allowed).
+TEAM_RANK_FOCUS = {
+    "offense": "pts", "scoring": "pts", "passing": "pass", "rushing": "rush",
+    "defense": "pts_allowed", "total_defense": "yds_allowed",
+    "pass_defense": "pass_allowed", "rush_defense": "rush_allowed",
+    "sacks": "sacks", "turnovers": "to_diff", "third_down": "third", "red_zone": "redzone",
+}
+
+
+def _flatten_team_stats(categories: List[Dict[str, Any]]) -> Dict[str, float]:
+    flat: Dict[str, float] = {}
+    for cat in categories or []:
+        for s in cat.get("stats", []):
+            if s.get("name") not in flat and isinstance(s.get("value"), (int, float)):
+                flat[s["name"]] = s["value"]
+    return flat
+
+
+def _fetch_team_stats(team: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    data = fetch_json(ENDPOINTS["team_stats"].format(team_id=team["id"]))
+    results = data.get("results") if isinstance(data, dict) else None
+    if not results:
+        return None
+    own = results.get("stats") or {}
+    return {
+        "name": team.get("displayName"),
+        "abbr": (team.get("abbr") or "").upper(),
+        "own": _flatten_team_stats(own.get("categories", []) if isinstance(own, dict) else own),
+        "opp": _flatten_team_stats(results.get("opponent", [])),
+    }
+
+
+def _all_team_stats() -> Optional[Dict[str, Dict[str, Any]]]:
+    """{TEAM_ABBR: {"name", "abbr", "values": {metric_key: value}, "ranks": {...}}}"""
+    with _TEAM_STATS_LOCK:
+        if _TEAM_STATS_CACHE["data"] and time.time() - _TEAM_STATS_CACHE["at"] < _TEAM_STATS_TTL:
+            return _TEAM_STATS_CACHE["data"]
+        teams = _load_static_data("teams.json")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            fetched = [t for t in pool.map(_fetch_team_stats, teams) if t]
+        if len(fetched) < 28:  # too many failures for meaningful ranks
+            logger.error("team stats: only %d/%d teams loaded", len(fetched), len(teams))
+            return None
+
+        table: Dict[str, Dict[str, Any]] = {}
+        for t in fetched:
+            values = {key: t[side].get(stat) for key, _, side, stat, _, _ in _TEAM_METRICS}
+            table[t["abbr"]] = {"name": t["name"], "abbr": t["abbr"], "values": values,
+                                "games": t["own"].get("gamesPlayed"), "ranks": {}}
+        for key, _, _, _, higher, _ in _TEAM_METRICS:
+            scored = [(abbr, row["values"][key]) for abbr, row in table.items()
+                      if row["values"][key] is not None]
+            for abbr, value in scored:
+                better = sum(1 for _, v in scored if (v > value if higher else v < value))
+                tied = sum(1 for _, v in scored if v == value) > 1
+                table[abbr]["ranks"][key] = (better + 1, tied)
+        _TEAM_STATS_CACHE.update(at=time.time(), data=table)
+        return table
+
+
+def _ordinal(n: int) -> str:
+    suffix = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
+def _rank_str(rank: tuple) -> str:
+    return ("T-" if rank[1] else "") + _ordinal(rank[0])
+
+
+def _metric_value(key: str, value: Optional[float]) -> str:
+    if value is None:
+        return "-"
+    pct = next(m[5] for m in _TEAM_METRICS if m[0] == key)
+    if pct:
+        return f"{value:.1f}%"
+    if key == "to_diff":
+        return f"{value:+.0f}"
+    return _fmt_num(round(value, 1))
+
+
+def get_team_rankings(team_name: Optional[str] = None, focus: Optional[str] = None) -> str:
+    """
+    With a team: its offense and defense stats with league ranks (1 = best of
+    32), plus top-5 strengths and bottom-5 weaknesses. Without a team: the
+    top 10 teams in `focus` (see TEAM_RANK_FOCUS; default offense+defense).
+    """
+    table = _all_team_stats()
+    if not table:
+        return "I couldn't load team stats right now — try again in a bit."
+    labels = {m[0]: m[1] for m in _TEAM_METRICS}
+    n = len(table)
+
+    if team_name:
+        meta = find_team(team_name)
+        abbr = (meta or {}).get("abbr", "").upper()
+        row = table.get(abbr)
+        if not row:
+            return f"I couldn't find team stats for '{team_name}'."
+        games = f"{_fmt_num(row['games'])} games, " if row.get("games") else ""
+        out = [f"📈 **{row['name']} — Team Rankings** ({games}ranks out of {n}, 1st = best)"]
+        for title, keys in (("Offense", _OFFENSE_KEYS), ("Defense", _DEFENSE_KEYS)):
+            out += ["", f"**{title}**", "| Stat | Value | Rank |", "|---|---|---|"]
+            for key in keys:
+                rank = row["ranks"].get(key)
+                out.append(f"| {labels[key]} | {_metric_value(key, row['values'][key])} | "
+                           f"{_rank_str(rank) if rank else '-'} |")
+        to_rank = row["ranks"].get("to_diff")
+        out.append(f"\nTurnover differential: **{_metric_value('to_diff', row['values']['to_diff'])}**"
+                   + (f" ({_rank_str(to_rank)})" if to_rank else ""))
+        strengths = [labels[k] for k, r in row["ranks"].items() if r[0] <= 5]
+        weaknesses = [labels[k] for k, r in row["ranks"].items() if r[0] > n - 5]
+        if strengths:
+            out.append(f"Strengths (top 5): {', '.join(strengths)}")
+        if weaknesses:
+            out.append(f"Weaknesses (bottom 5): {', '.join(weaknesses)}")
+        return "\n".join(out)
+
+    keys = [TEAM_RANK_FOCUS[focus]] if focus in TEAM_RANK_FOCUS else ["pts", "pts_allowed"]
+    out = []
+    for key in keys:
+        ranked = sorted((r for r in table.values() if key in r["ranks"]),
+                        key=lambda r: r["ranks"][key][0])
+        out += [f"📈 **Best in the NFL — {labels[key]}**"]
+        for r in ranked[:10]:
+            out.append(f"- **{_rank_str(r['ranks'][key])}:** {r['name']} — {_metric_value(key, r['values'][key])}")
+        out.append("")
+    return "\n".join(out).rstrip()
 
 
 # Stat keys a fan can ask leaders for, with display labels.

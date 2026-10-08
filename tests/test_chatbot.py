@@ -759,3 +759,31 @@ class TestStandingsRouting:
                         raw_query="would the bills make the AFC playoffs")
         _api_mock.get_playoff_picture.assert_called_once_with(conference="AFC")
         assert out["playoffs"] == "Picture\n\nBills division"
+
+
+class TestTeamStatsRouting:
+    def _run(self, **parsed):
+        base = {"intents": ["team_stats"], "team": None, "player": None, "player_b": None,
+                "raw_query": ""}
+        return chatbot._dispatch({**base, **parsed})[0]
+
+    def test_team_gets_full_profile(self):
+        _api_mock.get_team_rankings.reset_mock()
+        self._run(team="Buffalo Bills", raw_query="how's the bills defense")
+        _api_mock.get_team_rankings.assert_called_once_with("Buffalo Bills")
+
+    def test_league_question_uses_focus(self):
+        _api_mock.get_team_rankings.reset_mock()
+        self._run(raw_query="who has the best run defense in the league")
+        _api_mock.get_team_rankings.assert_called_once_with(focus="rush_defense")
+
+    @pytest.mark.parametrize("text,focus", [
+        ("best pass defense", "pass_defense"),
+        ("who has the best defense", "defense"),
+        ("which team scores the most", "offense"),
+        ("best rushing offense", "rushing"),
+        ("team with the most sacks", "sacks"),
+        ("random question", None),
+    ])
+    def test_focus_detection(self, text, focus):
+        assert chatbot._team_focus(text) == focus

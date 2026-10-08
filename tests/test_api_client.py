@@ -1104,3 +1104,75 @@ class TestDivisionStandings:
         out = _client_mod.get_playoff_picture()
         assert "**AFC**" in out and "**NFC**" in out
         assert "heading into Week 5" in out
+
+
+# ─── Team rankings ────────────────────────────────────────────────
+
+def _team_stats_payload(pts, pts_allowed, rush_allowed, sacks_taken=5, def_sacks=8):
+    own = [{"name": "passing", "stats": [{"name": "totalPointsPerGame", "value": pts},
+                                         {"name": "sacks", "value": sacks_taken}]},
+           {"name": "general", "stats": [{"name": "gamesPlayed", "value": 4.0}]},
+           {"name": "miscellaneous", "stats": [{"name": "turnOverDifferential", "value": 1.0}]}]
+    opp = [{"name": "passing", "stats": [{"name": "totalPointsPerGame", "value": pts_allowed},
+                                         {"name": "sacks", "value": def_sacks}]},
+           {"name": "rushing", "stats": [{"name": "rushingYardsPerGame", "value": rush_allowed}]}]
+    return {"results": {"stats": {"categories": own}, "opponent": opp}}
+
+
+# 30 filler teams + Bills (best offense, worst defense) + Falcons (best run D).
+_RANK_TEAMS = [{"id": str(i), "displayName": f"Team {i}", "abbr": f"t{i}"} for i in range(30)]
+_RANK_TEAMS += [{"id": "bills", "displayName": "Buffalo Bills", "abbr": "buf"},
+                {"id": "atl", "displayName": "Atlanta Falcons", "abbr": "atl"}]
+_RANK_PAYLOADS = {str(i): _team_stats_payload(20 + i * 0.1, 20, 100 + i) for i in range(30)}
+_RANK_PAYLOADS["bills"] = _team_stats_payload(31.8, 30.0, 116)
+_RANK_PAYLOADS["atl"] = _team_stats_payload(20, 20, 48.2)
+
+
+class TestTeamRankings:
+    @pytest.fixture(autouse=True)
+    def rank_env(self):
+        _client_mod._TEAM_STATS_CACHE.update(at=0.0, data=None)
+        fetch = lambda url, params=None, headers=None: _RANK_PAYLOADS.get(url.split("/teams/")[1].split("/")[0], {})
+        with patch.object(_client_mod, "_load_static_data", return_value=_RANK_TEAMS), \
+             patch.object(_client_mod, "fetch_json", side_effect=fetch) as f, \
+             patch.object(_client_mod, "find_team",
+                          side_effect=lambda q: {"buffalo bills": {"abbr": "buf"}}.get((q or "").lower())):
+            self.fetch = f
+            yield
+        _client_mod._TEAM_STATS_CACHE.update(at=0.0, data=None)
+
+    def test_best_offense_ranks_first(self):
+        out = _client_mod.get_team_rankings("Buffalo Bills")
+        assert "| Points per game | 31.8 | 1st |" in out
+
+    def test_lower_is_better_for_defense(self):
+        out = _client_mod.get_team_rankings("Buffalo Bills")
+        assert "| Points allowed per game | 30 | 32nd |" in out
+        assert "Weaknesses (bottom 5): " in out and "Points allowed per game" in out.split("Weaknesses")[1]
+
+    def test_ties_are_marked(self):
+        out = _client_mod.get_team_rankings("Buffalo Bills")
+        assert "| Sacks | 8 | T-1st |" in out  # every team has 8
+
+    def test_leaderboard_focus(self):
+        out = _client_mod.get_team_rankings(focus="rush_defense")
+        assert "Rushing yards allowed per game" in out
+        assert out.splitlines()[1] == "- **1st:** Atlanta Falcons — 48.2"
+
+    def test_default_leaderboard_has_offense_and_defense(self):
+        out = _client_mod.get_team_rankings()
+        assert "Points per game" in out and "Points allowed per game" in out
+
+    def test_cached_after_first_load(self):
+        _client_mod.get_team_rankings("Buffalo Bills")
+        calls = self.fetch.call_count
+        _client_mod.get_team_rankings(focus="sacks")
+        assert self.fetch.call_count == calls
+
+    def test_unknown_team(self):
+        assert "couldn't find team stats" in _client_mod.get_team_rankings("Nowhere Nobodies")
+
+    def test_too_many_failures_returns_message(self):
+        with patch.object(_client_mod, "fetch_json", return_value={"__error": "x"}):
+            _client_mod._TEAM_STATS_CACHE.update(at=0.0, data=None)
+            assert "couldn't load team stats" in _client_mod.get_team_rankings()
