@@ -55,6 +55,8 @@ from src.api_client import (
     get_box_score,
     get_playoff_picture,
     get_team_rankings,
+    get_postseason_results,
+    get_draft_context,
     get_player_team,
     current_nfl_season_year,
     current_nfl_week,
@@ -63,18 +65,27 @@ from src.api_client import (
 logger = logging.getLogger(__name__)
 
 # Free-tier models, tried in order. Each model has its own free quota
-# (per Google Cloud project), so falling through the chain adds their daily
-# capacity together. Override with GEMINI_MODELS="model-a,model-b".
-_DEFAULT_GEMINI_MODELS = (
-    "gemini-3.5-flash-lite",
-    "gemini-3.5-flash",
-    "gemini-2.5-flash",
+# (per Google Cloud project), so falling through a chain adds their daily
+# capacity together. Two chains: reading the question is a small structured
+# task, so it starts on the lite model; writing the answer users read starts
+# on full Flash (the lite model occasionally emitted stray non-English
+# words). Override with GEMINI_EXTRACT_MODELS / GEMINI_FORMAT_MODELS, or
+# GEMINI_MODELS to use one chain for both.
+def _model_list(env: str, default: tuple) -> list:
+    raw = os.getenv(env) or os.getenv("GEMINI_MODELS") or ",".join(default)
+    return [m.strip() for m in raw.split(",") if m.strip()]
+
+
+GEMINI_EXTRACT_MODELS = _model_list("GEMINI_EXTRACT_MODELS", (
+    "gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-3.5-flash",
     "gemini-3.1-flash-lite",   # slowest in testing (~16s); last resort
-)
-GEMINI_MODELS = [
-    m.strip() for m in os.getenv("GEMINI_MODELS", ",".join(_DEFAULT_GEMINI_MODELS)).split(",")
-    if m.strip()
-]
+))
+GEMINI_FORMAT_MODELS = _model_list("GEMINI_FORMAT_MODELS", (
+    "gemini-3.5-flash", "gemini-2.5-flash", "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+))
+# Every model in use, for app-wide checks ("is anything still available?").
+GEMINI_MODELS = list(dict.fromkeys(GEMINI_EXTRACT_MODELS + GEMINI_FORMAT_MODELS))
 
 # Position strings that the extraction prompt places in the "player" slot
 # for roster/waiver queries filtered by position.
@@ -254,11 +265,11 @@ def _seconds_until_pacific_midnight() -> float:
     return (midnight - pacific).total_seconds()
 
 
-def _available_models() -> list:
-    """Models in GEMINI_MODELS that aren't cooling down, in order."""
+def _available_models(models: Optional[list] = None) -> list:
+    """Models in `models` (default: all in use) not cooling down, in order."""
     now = time.time()
     with _budget_lock:
-        return [m for m in GEMINI_MODELS if _model_cooldown.get(m, 0) <= now]
+        return [m for m in (models or GEMINI_MODELS) if _model_cooldown.get(m, 0) <= now]
 
 
 def _check_global_budget() -> Optional[str]:
@@ -327,14 +338,31 @@ def _model_failed(model: str, exc: Exception) -> bool:
     return True
 
 
+# Scripts that never belong in an English NFL answer: Devanagari, Arabic,
+# Hebrew, Cyrillic, Thai, CJK, Hangul, Japanese kana. Latin with accents
+# (player names) and emoji are kept.
+_FOREIGN_SCRIPT_RE = re.compile(
+    "[\u0400-\u04FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u0E00-\u0E7F"
+    "\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF]+"
+)
+
+
+def _strip_foreign_script(text: str) -> str:
+    """Drops stray non-Latin script the lite models occasionally emit ("big बोर्डs")."""
+    cleaned = _FOREIGN_SCRIPT_RE.sub("", text)
+    if cleaned != text:
+        logger.warning("Removed stray non-Latin characters from model output")
+    return cleaned
+
+
 def _call_gemini(system: str, user: str, expect_json: bool = False) -> str:
-    """Blocking call — used for intent extraction. Falls through GEMINI_MODELS."""
+    """Blocking call — used for intent extraction. Falls through GEMINI_EXTRACT_MODELS."""
     try:
         client = _get_gemini_client()
     except ValueError:
         logger.error("Gemini config error: GEMINI_API_KEY is not set")
         return CONFIG_ERROR
-    for model in _available_models():
+    for model in _available_models(GEMINI_EXTRACT_MODELS):
         try:
             response = client.models.generate_content(
                 model=model,
@@ -354,7 +382,7 @@ def _call_gemini(system: str, user: str, expect_json: bool = False) -> str:
 
 def _stream_gemini(system: str, user: str) -> Generator[str, None, None]:
     """
-    Streaming call — yields tokens as they arrive. Falls through GEMINI_MODELS
+    Streaming call — yields tokens as they arrive. Falls through GEMINI_FORMAT_MODELS
     while nothing has been yielded; a failure mid-answer yields API_ERROR.
     """
     try:
@@ -363,7 +391,7 @@ def _stream_gemini(system: str, user: str) -> Generator[str, None, None]:
         logger.error("Gemini config error: GEMINI_API_KEY is not set")
         yield CONFIG_ERROR
         return
-    for model in _available_models():
+    for model in _available_models(GEMINI_FORMAT_MODELS):
         started = False
         try:
             stream = client.models.generate_content_stream(
@@ -372,9 +400,10 @@ def _stream_gemini(system: str, user: str) -> Generator[str, None, None]:
                 config=types.GenerateContentConfig(system_instruction=system, temperature=0.7),
             )
             for chunk in stream:
-                if chunk.text:
+                text = _strip_foreign_script(chunk.text or "")
+                if text:
                     started = True
-                    yield chunk.text
+                    yield text
             return
         except Exception as e:
             retry_next = _model_failed(model, e)
@@ -426,6 +455,10 @@ Allowed intents (pick ALL that apply — multi-intent is supported):
   team_stats  — how a TEAM is doing statistically: offense/defense rankings,
                 "how's the Bills defense", "best run defense in the league",
                 "which team scores the most", "Eagles offense stats"
+  postseason  — PAST playoff results and Super Bowls: "who won the Super Bowl
+                last season", "2023 playoff results", "who won the AFC
+                championship last year"
+  draft       — upcoming NFL draft prospects, mock drafts, college players
   leaders     — league or position leaders and rankings ("who leads in passing
                 yards", "top 5 fantasy QBs", "most receiving TDs")
   player      — player profile, career stats, or scouting report
@@ -463,6 +496,8 @@ Rules:
   An NFL season is named for the year it starts (Feb 2026 Super Bowl = 2025 season).
 - For team-vs-team questions ("when do the Cowboys play the Eagles", "Bills vs
   Chiefs history"), put the first team in "team" and the second in "opponent".
+- Rookie questions ("best rookies", "rookie of the year race") → "leaders".
+- Upcoming draft prospects, mock drafts and college players → "draft".
 - For leaders: set "stat" (fantasy rankings → pts_ppr unless half-PPR/standard is
   named) and put a position filter (QB, RB, WR, TE, K) in "player". "Top N" goes
   nowhere — the app shows the top 10.
@@ -688,6 +723,13 @@ def _handle_team_stats(team, _player, _player_b, raw_query, *_):
     return get_team_rankings(focus=_team_focus(raw_query))
 
 
+def _handle_postseason(_team, _player, _player_b, raw_query, season, *_):
+    # Default season (most recent completed playoffs) is resolved in api_client.
+    super_bowl_only = "super bowl" in (raw_query or "").lower()
+    return get_postseason_results(season if isinstance(season, int) else None,
+                                  super_bowl_only=super_bowl_only)
+
+
 def _handle_box_score(team, _player, _player_b, _raw_query, _season,
                       opponent=None, _stat=None, week=None, *_):
     if not team:
@@ -695,9 +737,12 @@ def _handle_box_score(team, _player, _player_b, _raw_query, _season,
     return get_box_score(team, opponent=opponent, week=week)
 
 
-def _handle_leaders(_team, player, _player_b, _raw_query, _season, _opponent=None, stat=None, *_):
+def _handle_leaders(_team, player, _player_b, raw_query, _season, _opponent=None, stat=None, *_):
     # Position filter rides in the player slot, as for roster/waiver.
-    return get_league_leaders(stat or "pts_ppr", position=_position_hint(player, VALID_POSITIONS))
+    position = _position_hint(player, VALID_POSITIONS)
+    if "rookie" in (raw_query or "").lower():
+        return get_league_leaders(stat or "pts_ppr", position=position, rookies_only=True)
+    return get_league_leaders(stat or "pts_ppr", position=position)
 
 
 def _handle_history(team, player, _player_b, _raw_query, season, *_):
@@ -721,6 +766,8 @@ _INTENT_DISPATCH: Dict[str, IntentHandler] = {
     "leaders":     _handle_leaders,
     "box_score":   _handle_box_score,
     "team_stats":  _handle_team_stats,
+    "postseason":  _handle_postseason,
+    "draft":       lambda *_: get_draft_context(),
     "injury":      lambda t, p, *_: get_player_injury(p or t) if (p or t) else "Which player's injury status?",
     "odds":        lambda t, *_: get_game_odds(t) if t else "Which team's betting lines?",
     "player":      _handle_player,
@@ -820,12 +867,20 @@ Guidelines:
 - Use football terminology naturally.
 - Add light personality ("That's a tough matchup", "The defence has been shaky").
 - Format scores, records, and stats in bold Markdown.
-- Never fabricate stats or scores — only use provided data.
+- Current-season facts (scores, stats, records, injuries, standings, rosters,
+  schedules) come ONLY from the provided data — never invent them.
+- With no data provided, answer timeless NFL knowledge (rules, history, records,
+  legends, how things work) from your own knowledge. For anything that may have
+  changed recently (rosters, coaches, contracts, recent champions), say it's as
+  of your latest information.
 - For injury data: clearly state status (Questionable/Out/IR) and expected return.
 - For fantasy sit/start: clear recommendation first, then reasoning.
 - For player comparisons: highlight the key statistical and contextual differences.
 - For trade advice: give a clear verdict (Accept/Decline/Counter) first, then reasoning.
 - For waiver wire: list players in rank order, give a one-line reason for each pickup.
+- For draft prospects: name college players from your knowledge, say rankings are
+  as of your latest information, and NEVER present anyone in the ALREADY DRAFTED
+  list as a prospect — they are NFL players now.
 - For team rankings: answer the part asked about (offense, defense, run defense…)
   using the values and ranks given; rank 1 is the best of 32. Name a strength or
   weakness when it explains the team's record.
@@ -971,7 +1026,7 @@ def _update_conv_state(parsed: Dict[str, Any],
     # discussion).  If that behaviour ever needs to change, add those intents
     # to the set below.
     if intents & {"scores", "standings", "news", "league_news", "schedule",
-                  "last_game", "box_score", "leaders", "playoffs", "team_stats",
+                  "last_game", "box_score", "leaders", "playoffs", "team_stats", "postseason",
                   "injury", "odds", "roster"}:
         return {}
 

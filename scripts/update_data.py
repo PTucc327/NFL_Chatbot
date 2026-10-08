@@ -62,11 +62,9 @@ SLEEPER_PLAYERS = "https://api.sleeper.app/v1/players/nfl"
 # player dump — rookies (years_exp == 0) ranked by Sleeper's search_rank.
 # search_rank is a universal relevance score Sleeper assigns; lower = more
 # searched / more notable.  9999999 means "unranked / unknown player".
-_SLEEPER_PROSPECT_RANK_CUTOFF = 500   # only include well-known prospects
 
 # Fantasy-relevant skill positions only — the full Sleeper dump has every
 # practice-squad lineman; we only want players users actually ask about.
-SKILL_POSITIONS = {"QB", "RB", "WR", "TE", "K"}
 DEPTH_POSITIONS = {"QB", "RB", "WR", "TE", "K", "LB", "CB", "S", "DE", "DT"}
 
 REQUEST_TIMEOUT = 15
@@ -170,55 +168,30 @@ def update_rosters(raw: Dict[str, Dict], dry_run: bool = False) -> None:
 
 def update_prospects(raw: Dict[str, Dict], dry_run: bool = False) -> None:
     """
-    Builds data/prospects.json from the Sleeper player dump — rookies
-    (years_exp == 0) in fantasy-relevant skill positions, ranked by
-    Sleeper's search_rank (lower = more notable/searched; 9999999 means
-    unranked, which we exclude).
+    Prunes data/prospects.json: removes prospects who are now active NFL
+    players (drafted), so the app shows their NFL profile instead of a stale
+    college card. New prospects are added by hand — there is no free,
+    reliable draft-prospect feed (ESPN retired theirs).
 
-    NOTE: this replaces a previous version that called ESPN's now-retired
-    draft-prospects endpoint via an `ESPN_DRAFT_API` constant that had
-    already been deleted from this file — every run since that refactor
-    crashed with a NameError and silently fell through to "keep the
-    existing file", so prospects.json has not actually updated in months.
-
-    Schema per prospect (matches the existing hand-curated format so
-    api_client.py needs no changes):
-      { name, school, pos, stats, outlook }
+    NOTE: an earlier version replaced the file with Sleeper *rookies*,
+    which are NFL players, not draft prospects.
     """
-    rookies = []
-    for pid, p in raw.items():
-        if not p.get("active"):
-            continue
-        if p.get("years_exp") != 0:
-            continue
-        pos = p.get("position") or ""
-        if pos not in SKILL_POSITIONS:
-            continue
-        rank = p.get("search_rank")
-        if rank is None or rank >= _SLEEPER_PROSPECT_RANK_CUTOFF:
-            continue
-        rookies.append({
-            "name":    p.get("full_name", ""),
-            "school":  p.get("college") or "Unknown",
-            "pos":     pos,
-            "stats":   "See player profile for current-season stats",
-            "outlook": f"NFL rookie — Sleeper search rank #{rank}",
-            "_rank":   rank,  # sort key only, stripped before writing
-        })
-
-    if not rookies:
-        log.warning("No rookies matched the prospect criteria — keeping existing file.")
+    try:
+        with open(PROSPECTS_PATH, encoding="utf-8") as f:
+            prospects = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        log.warning(f"Could not read prospects.json ({e}) — nothing to prune.")
         return
 
-    rookies.sort(key=lambda r: r["_rank"])
-    for r in rookies:
-        del r["_rank"]
+    nfl_names = {(p.get("full_name") or "").lower() for p in raw.values() if p.get("active")}
+    kept = [p for p in prospects if p.get("name", "").lower() not in nfl_names]
+    drafted = [p.get("name") for p in prospects if p not in kept]
+    if not drafted:
+        log.info("  No prospects have reached the NFL — prospects.json unchanged.")
+        return
+    log.info(f"  Removing drafted prospects now in the NFL: {', '.join(drafted)}")
+    _write_json(PROSPECTS_PATH, kept, dry_run)
 
-    log.info(f"  {len(rookies)} notable rookies derived from Sleeper dump")
-    _write_json(PROSPECTS_PATH, rookies, dry_run)
-
-
-# ── Main ───────────────────────────────────────────────────────────
 
 def main() -> None:
     parser = argparse.ArgumentParser(

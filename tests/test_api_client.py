@@ -1176,3 +1176,147 @@ class TestTeamRankings:
         with patch.object(_client_mod, "fetch_json", return_value={"__error": "x"}):
             _client_mod._TEAM_STATS_CACHE.update(at=0.0, data=None)
             assert "couldn't load team stats" in _client_mod.get_team_rankings()
+
+
+
+# ─── Postseason results, prospects precedence, rookie leaders ─────
+
+def _ps_event(winner, w, loser, l, note=""):
+    return {"date": "2026-02-08T23:30Z", "competitions": [{
+        "status": {"type": {"state": "post"}}, "venue": {"fullName": "Levi's Stadium"},
+        "notes": [{"headline": note}] if note else [],
+        "competitors": [{"winner": True, "score": w, "team": {"displayName": winner}},
+                        {"winner": False, "score": l, "team": {"displayName": loser}}]}]}
+
+
+_PS_WEEKS = {1: [_ps_event("Buffalo Bills", "31", "Denver Broncos", "7")],
+             2: [], 3: [], 5: [_ps_event("Seattle Seahawks", "29", "New England Patriots", "13",
+                                          "Super Bowl LX")]}
+
+
+class TestPostseason:
+    @pytest.fixture(autouse=True)
+    def ps_env(self):
+        _client_mod._POSTSEASON_CACHE.clear()
+        fetch = lambda url, params=None, headers=None: {"events": _PS_WEEKS.get(params["week"], [])}
+        with patch.object(_client_mod, "fetch_json", side_effect=fetch) as f:
+            self.fetch = f
+            yield
+        _client_mod._POSTSEASON_CACHE.clear()
+
+    def test_super_bowl_only(self):
+        out = _client_mod.get_postseason_results(2025, super_bowl_only=True)
+        assert "Super Bowl LX: **Seattle Seahawks 29**, New England Patriots 13 at Levi's Stadium" in out
+        assert "Wild Card" not in out
+
+    def test_full_bracket_skips_empty_rounds(self):
+        out = _client_mod.get_postseason_results(2025)
+        assert "**Wild Card**" in out and "**Buffalo Bills 31**" in out
+        assert "Divisional" not in out
+
+    def test_default_season_before_february_is_last_season(self):
+        with patch.object(_client_mod, "_current_nfl_season_year", return_value=2026):
+            out = _client_mod.get_postseason_results()
+        assert "2025 NFL Playoffs" in out
+        assert self.fetch.call_args.kwargs["params"]["dates"] == 2025
+
+    def test_completed_postseason_is_cached(self):
+        _client_mod.get_postseason_results(2025)
+        calls = self.fetch.call_count
+        _client_mod.get_postseason_results(2025)
+        assert self.fetch.call_count == calls
+
+
+class TestProspectPrecedence:
+    def test_drafted_prospect_gets_nfl_profile(self):
+        _client_mod._PLAYER_CACHE = {"hunter": {
+            "player_id": "hunter", "full_name": "Travis Hunter", "position": "DB",
+            "team": "JAX", "active": True, "years_exp": 1}}
+        _client_mod._PROSPECTS = _build_lookup([{"name": "Travis Hunter", "school": "Colorado",
+                                                 "pos": "WR/CB", "stats": "x"}])
+        try:
+            with patch.object(_client_mod, "get_fantasy_player_stats", return_value="0 pts"):
+                out = _client_mod.get_player_profile_smart("travis hunter")
+        finally:
+            _client_mod._PROSPECTS = {}
+        assert "Active: Travis Hunter" in out and "JAX" in out
+
+    def test_college_player_still_gets_prospect_card(self):
+        _client_mod._PROSPECTS = _build_lookup([{"name": "Arch Manning", "school": "Texas",
+                                                 "pos": "QB", "stats": "x"}])
+        try:
+            out = _client_mod.get_player_profile_smart("arch manning")
+        finally:
+            _client_mod._PROSPECTS = {}
+        assert "Prospect: Arch Manning" in out
+
+
+class TestRookieLeaders:
+    def test_rookies_only(self):
+        _client_mod._PLAYER_CACHE = {
+            "r1": {"full_name": "Rookie Star", "position": "WR", "team": "CLE", "years_exp": 0},
+            "v1": {"full_name": "Vet Star", "position": "WR", "team": "MIN", "years_exp": 6}}
+        stats = {"r1": {"pts_ppr": 55.4, "gp": 4}, "v1": {"pts_ppr": 90.0, "gp": 4}}
+        with patch.object(_client_mod, "_get_stats", return_value=stats), \
+             patch.object(_client_mod, "_current_nfl_week", return_value=5):
+            out = _client_mod.get_league_leaders("pts_ppr", rookies_only=True)
+        assert "Rookie PPR fantasy points" in out
+        assert "Rookie Star" in out and "Vet Star" not in out
+
+
+
+# ─── Live in-game situation ───────────────────────────────────────
+
+_LIVE_TEAMS = [{"homeAway": "home", "team": {"id": "6", "abbreviation": "DAL"}},
+               {"homeAway": "away", "team": {"id": "27", "abbreviation": "TB"}}]
+
+
+class TestLiveSituation:
+    def test_possession_down_distance_red_zone_last_play(self):
+        sit = {"possession": "6", "downDistanceText": "2nd & 7 at TB 15", "isRedZone": True,
+               "lastPlay": {"text": "Dak Prescott pass short right to CeeDee Lamb for 9 yards"}}
+        out = _client_mod._live_situation(sit, _LIVE_TEAMS)
+        assert out == ("🏈 DAL ball, 2nd & 7 at TB 15 · 🔴 red zone — "
+                       "last play: Dak Prescott pass short right to CeeDee Lamb for 9 yards")
+
+    def test_between_plays_without_possession(self):
+        out = _client_mod._live_situation({"lastPlay": {"text": "End of 1st Quarter"}}, _LIVE_TEAMS)
+        assert out == "last play: End of 1st Quarter"
+
+    def test_no_situation(self):
+        assert _client_mod._live_situation(None, _LIVE_TEAMS) == ""
+
+    def test_live_scoreboard_line_includes_situation(self):
+        event = {"date": "2026-10-09T00:15Z", "competitions": [{
+            "status": {"type": {"state": "in", "shortDetail": "2nd 4:12"}},
+            "competitors": [
+                {"homeAway": "home", "score": "10", "team": {"id": "6", "displayName": "Dallas Cowboys", "abbreviation": "DAL"}},
+                {"homeAway": "away", "score": "7", "team": {"id": "27", "displayName": "Tampa Bay Buccaneers", "abbreviation": "TB"}}],
+            "situation": {"possession": "27", "downDistanceText": "3rd & 2 at DAL 40"}}]}
+        with patch.object(_client_mod, "fetch_json", return_value={"events": [event]}):
+            out = _client_mod.get_live_scores()
+        assert "Live Right Now" in out
+        assert "🏈 TB ball, 3rd & 2 at DAL 40" in out
+
+
+
+class TestDraftContext:
+    def test_lists_rookie_class_and_curated_prospects(self):
+        _client_mod._PLAYER_CACHE = {
+            "d": {"full_name": "Caleb Downs", "position": "DB", "team": "DAL", "college": "Ohio State",
+                  "active": True, "years_exp": 0, "search_rank": 40},
+            "v": {"full_name": "Ryan Williams", "position": "LB", "team": "BUF",
+                  "active": True, "years_exp": 3, "search_rank": 900},
+            "u": {"full_name": "Unranked Rookie", "position": "OL", "team": "NYJ",
+                  "active": True, "years_exp": 0, "search_rank": 9999999}}
+        _client_mod._PROSPECTS = _build_lookup([{"name": "Arch Manning", "school": "Texas", "pos": "QB"}])
+        try:
+            with patch.object(_client_mod, "_current_nfl_season_year", return_value=2026):
+                out = _client_mod.get_draft_context()
+        finally:
+            _client_mod._PROSPECTS = {}
+        assert "ALREADY DRAFTED" in out and "2026 NFL rookie class" in out
+        assert "- Caleb Downs (DB, DAL, from Ohio State)" in out
+        assert "Ryan Williams" not in out      # veteran, not this draft class
+        assert "Unranked Rookie" not in out    # obscure rookies are noise
+        assert "- Arch Manning (QB, Texas)" in out

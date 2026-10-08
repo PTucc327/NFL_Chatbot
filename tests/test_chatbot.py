@@ -502,6 +502,8 @@ def chain(fresh_budget):
     models = ["m-lite", "m-flash", "m-last"]
     fake = mock.Mock()
     with mock.patch.object(chatbot, "GEMINI_MODELS", models), \
+         mock.patch.object(chatbot, "GEMINI_EXTRACT_MODELS", models), \
+         mock.patch.object(chatbot, "GEMINI_FORMAT_MODELS", models), \
          mock.patch.object(chatbot, "_get_gemini_client", return_value=fake):
         def setup(behavior):
             fake.models = _FakeModels(behavior)
@@ -787,3 +789,72 @@ class TestTeamStatsRouting:
     ])
     def test_focus_detection(self, text, focus):
         assert chatbot._team_focus(text) == focus
+
+
+
+class TestSplitChainsAndScriptFilter:
+    def test_extraction_and_formatting_use_their_own_chains(self, fresh_budget):
+        fake = mock.Mock()
+        fake.models = _FakeModels({"lite": '{"ok": 1}', "flash": "answer"})
+        with mock.patch.object(chatbot, "GEMINI_EXTRACT_MODELS", ["lite"]), \
+             mock.patch.object(chatbot, "GEMINI_FORMAT_MODELS", ["flash"]), \
+             mock.patch.object(chatbot, "GEMINI_MODELS", ["lite", "flash"]), \
+             mock.patch.object(chatbot, "_get_gemini_client", return_value=fake):
+            assert chatbot._call_gemini("s", "q") == '{"ok": 1}'
+            assert list(chatbot._stream_gemini("s", "q")) == ["answer"]
+        assert fake.models.calls == ["lite", "flash"]
+
+    def test_model_list_env_precedence(self, monkeypatch):
+        monkeypatch.delenv("GEMINI_FORMAT_MODELS", raising=False)
+        monkeypatch.setenv("GEMINI_MODELS", "a, b")
+        assert chatbot._model_list("GEMINI_FORMAT_MODELS", ("x",)) == ["a", "b"]
+        monkeypatch.setenv("GEMINI_FORMAT_MODELS", "c")
+        assert chatbot._model_list("GEMINI_FORMAT_MODELS", ("x",)) == ["c"]
+        monkeypatch.delenv("GEMINI_MODELS"); monkeypatch.delenv("GEMINI_FORMAT_MODELS")
+        assert chatbot._model_list("GEMINI_FORMAT_MODELS", ("x", "y")) == ["x", "y"]
+
+    def test_foreign_script_removed_but_names_kept(self):
+        text = "no big \u092c\u094b\u0930\u094d\u0921s yet, Jos\u00e9 Ram\u00edrez \U0001F3C8"
+        assert chatbot._strip_foreign_script(text) == "no big s yet, Jos\u00e9 Ram\u00edrez \U0001F3C8"
+
+    def test_stream_filters_each_chunk(self, chain):
+        chain({"m-lite": ["Top ", "\u092c\u094b\u0930\u094d\u0921", "prospects"],
+               "m-flash": "x", "m-last": "x"})
+        assert "".join(chatbot._stream_gemini("s", "q")) == "Top prospects"
+
+
+
+class TestPostseasonAndRookieRouting:
+    def _run(self, **parsed):
+        base = {"intents": [], "team": None, "player": None, "player_b": None, "raw_query": ""}
+        return chatbot._dispatch({**base, **parsed})[0]
+
+    def test_super_bowl_question(self):
+        _api_mock.get_postseason_results.reset_mock()
+        self._run(intents=["postseason"], raw_query="who won the Super Bowl last season", season=2025)
+        _api_mock.get_postseason_results.assert_called_once_with(2025, super_bowl_only=True)
+
+    def test_playoff_results_default_season(self):
+        _api_mock.get_postseason_results.reset_mock()
+        self._run(intents=["postseason"], raw_query="playoff results")
+        _api_mock.get_postseason_results.assert_called_once_with(None, super_bowl_only=False)
+
+    def test_rookie_leaders(self):
+        _api_mock.get_league_leaders.reset_mock()
+        self._run(intents=["leaders"], raw_query="best rookies this season")
+        _api_mock.get_league_leaders.assert_called_once_with("pts_ppr", position=None, rookies_only=True)
+
+    def test_format_prompt_allows_general_knowledge(self):
+        assert "timeless NFL knowledge" in chatbot._FORMATTING_SYSTEM
+        assert "Current-season facts" in chatbot._FORMATTING_SYSTEM
+
+
+
+class TestDraftRouting:
+    def test_draft_intent_supplies_guard_data(self):
+        _api_mock.get_draft_context.return_value = "ALREADY DRAFTED ..."
+        results, _ = chatbot._dispatch({"intents": ["draft"], "raw_query": "top 2027 prospects"})
+        assert results["draft"] == "ALREADY DRAFTED ..."
+
+    def test_format_rule_forbids_drafted_players(self):
+        assert "NEVER present anyone in the ALREADY DRAFTED" in chatbot._FORMATTING_SYSTEM

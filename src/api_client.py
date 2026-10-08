@@ -373,6 +373,32 @@ def get_team_news(team_name: str) -> str:
     return "\n".join(md)
 
 
+def _live_situation(situation: Optional[Dict[str, Any]], teams: List[Dict[str, Any]]) -> str:
+    """
+    In-game context from ESPN's live `situation`: possession, down and
+    distance, red zone, last play. '' when there's nothing to report
+    (between quarters, halftime, or not a live game).
+    """
+    if not situation:
+        return ""
+    parts = []
+    poss_id = str(situation.get("possession") or "")
+    poss = next((t.get("team", {}).get("abbreviation") for t in teams
+                 if str(t.get("team", {}).get("id")) == poss_id), None)
+    dd = situation.get("downDistanceText") or situation.get("shortDownDistanceText")
+    if poss and dd:
+        parts.append(f"🏈 {poss} ball, {dd}")
+    elif poss:
+        parts.append(f"🏈 {poss} ball")
+    if situation.get("isRedZone"):
+        parts.append("🔴 red zone")
+    last = (situation.get("lastPlay") or {}).get("text")
+    text = " · ".join(parts)
+    if last:
+        text += (" — " if text else "") + f"last play: {last}"
+    return text
+
+
 def get_live_scores(team_name: Optional[str] = None):
     """Fetches live NFL scores with home/away context and venue."""
     data = fetch_json(ENDPOINTS["scoreboard"])
@@ -411,6 +437,8 @@ def get_live_scores(team_name: Optional[str] = None):
             line = f"{aw_name} @ {hm_name}{venue_str} ({to_et(dt)}{_broadcast_suffix(comp)})"
         else:
             line = f"{aw_name} **{aw_score}** @ {hm_name} **{hm_score}**{venue_str} ({to_et(dt)}, {detail})"
+            if state == "in" and (live := _live_situation(comp.get("situation"), teams)):
+                line += f"\n  - {live}"
 
         if team_q and team_q not in (aw_name + hm_name).lower(): continue
         results[state].append(line)
@@ -889,10 +917,13 @@ def get_box_score(team_name: str, opponent: Optional[str] = None,
     name = lambda t: t.get("team", {}).get("displayName", "?")
 
     live = " 🔴 LIVE" if status.get("state") == "in" else ""
+    situation = summary.get("situation") or comp.get("situation")
     out = [f"📦 **Box Score{live}: {name(away)} {away.get('score', '?')} @ "
            f"{name(home)} {home.get('score', '?')}** ({detail})",
            " · ".join(x for x in (f"Week {week_no}" if week_no else "", when,
                                   f"at {venue}" if venue else "") if x)]
+    if live and (now := _live_situation(situation, teams)):
+        out.append(f"**Right now:** {now}")
 
     # Line score by quarter
     quarters = max(len(away.get("linescores", [])), len(home.get("linescores", [])))
@@ -1109,6 +1140,108 @@ def get_team_rankings(team_name: Optional[str] = None, focus: Optional[str] = No
     return "\n".join(out).rstrip()
 
 
+# ----------------------------------------------------
+# Postseason results (past playoffs / Super Bowls)
+# ----------------------------------------------------
+# ESPN postseason weeks: 1 Wild Card, 2 Divisional, 3 Conference
+# Championships, 4 Pro Bowl (skipped), 5 Super Bowl. Past seasons never
+# change, so results are cached for the life of the process.
+_POSTSEASON_ROUNDS = ((1, "Wild Card"), (2, "Divisional Round"),
+                      (3, "Conference Championships"), (5, "Super Bowl"))
+_POSTSEASON_CACHE: Dict[int, List[tuple]] = {}
+
+
+def _postseason_games(season: int, week: int) -> Optional[List[Dict[str, Any]]]:
+    data = fetch_json(ENDPOINTS["scoreboard"],
+                      params={"seasontype": 3, "week": week, "dates": season})
+    if "__error" in data:
+        return None
+    games = []
+    for ev in data.get("events", []):
+        comp = ev.get("competitions", [{}])[0]
+        if comp.get("status", {}).get("type", {}).get("state") != "post":
+            continue
+        teams = comp.get("competitors", [])
+        winner = next((t for t in teams if t.get("winner")), None)
+        loser = next((t for t in teams if t is not winner), None)
+        if not winner or not loser:
+            continue
+        note = next((n.get("headline") for n in comp.get("notes", []) if n.get("headline")), "")
+        games.append({
+            "winner": winner["team"]["displayName"], "w_score": winner.get("score"),
+            "loser": loser["team"]["displayName"], "l_score": loser.get("score"),
+            "note": note, "venue": (comp.get("venue") or {}).get("fullName", ""),
+            "date": ev.get("date", "")[:10],
+        })
+    return games
+
+
+def get_postseason_results(season: Optional[int] = None, super_bowl_only: bool = False) -> str:
+    """
+    Playoff results for a season (the season a Super Bowl concludes, e.g. the
+    2025 season's Super Bowl LX was in Feb 2026). Default: the most recent
+    completed postseason.
+    """
+    if season is None:
+        season = _current_nfl_season_year()
+        # The current season's playoffs haven't happened until February.
+        if datetime.date.today() < datetime.date(season + 1, 2, 15):
+            season -= 1
+
+    if season not in _POSTSEASON_CACHE:
+        rounds = []
+        for week, label in _POSTSEASON_ROUNDS:
+            games = _postseason_games(season, week)
+            if games is None:
+                return "I'm having trouble reaching past playoff results right now."
+            if games:
+                rounds.append((label, games))
+        if not rounds:
+            return f"I don't have playoff results for the {season} season."
+        if any(label == "Super Bowl" for label, _ in rounds):  # season complete: cache
+            _POSTSEASON_CACHE[season] = rounds
+    else:
+        rounds = _POSTSEASON_CACHE[season]
+
+    out = [f"🏆 **{season} NFL Playoffs** (played {season}-{season + 1} season)"]
+    for label, games in rounds:
+        if super_bowl_only and label != "Super Bowl":
+            continue
+        out.append(f"\n**{label}**")
+        for g in games:
+            title = f"{g['note']}: " if label == "Super Bowl" and g["note"] else ""
+            where = f" at {g['venue']}" if label == "Super Bowl" and g["venue"] else ""
+            out.append(f"- {title}**{g['winner']} {g['w_score']}**, {g['loser']} {g['l_score']}"
+                       f"{where} ({g['date']})")
+    return "\n".join(out)
+
+
+def get_draft_context(limit: int = 80) -> str:
+    """
+    Guard data for draft-prospect questions. There is no free prospect feed,
+    so the formatter answers from its own knowledge — which lags reality (it
+    listed Caleb Downs as a 2027 prospect after Dallas drafted him in 2026).
+    This lists the latest draft class already in the NFL, plus any curated
+    college prospects, so those players are never presented as upcoming.
+    """
+    _ensure_player_cache()
+    season = _current_nfl_season_year()
+    rookies = sorted(
+        (p for p in _PLAYER_CACHE.values()
+         if p.get("active") and p.get("years_exp") == 0 and p.get("full_name")
+         and (p.get("search_rank") or 9_999_999) < 9_999_999),
+        key=lambda p: p.get("search_rank"),
+    )[:limit]
+    out = [f"ALREADY DRAFTED — the {season} NFL rookie class (now NFL players; never "
+           f"list them as upcoming draft prospects):"]
+    out += [f"- {p['full_name']} ({p.get('position', '?')}, {p.get('team') or 'FA'}"
+            + (f", from {p['college']}" if p.get("college") else "") + ")" for p in rookies]
+    curated = [f"- {p['name']} ({p.get('pos', '?')}, {p.get('school', '?')})" for p in _PROSPECTS.values()]
+    if curated:
+        out += ["", "Known college prospects (curated list, may be incomplete):"] + curated
+    return "\n".join(out)
+
+
 # Stat keys a fan can ask leaders for, with display labels.
 LEADER_STATS = {
     "pass_yd": "passing yards", "pass_td": "passing TDs", "pass_int": "interceptions thrown",
@@ -1120,7 +1253,7 @@ LEADER_STATS = {
 
 
 def get_league_leaders(stat: Optional[str] = "pts_ppr", position: Optional[str] = None,
-                       top_n: int = 10) -> str:
+                       top_n: int = 10, rookies_only: bool = False) -> str:
     """
     Season leaders for a stat ("passing yards leaders"), optionally by
     position ("top 5 fantasy QBs" = pts_ppr, QB). Uses the cached Sleeper
@@ -1142,13 +1275,15 @@ def get_league_leaders(stat: Optional[str] = "pts_ppr", position: Optional[str] 
             continue
         if pos and p.get("position") != pos:
             continue
+        if rookies_only and p.get("years_exp") != 0:
+            continue
         rows.append((value, p, s.get("gp")))
     if not rows:
         return f"No {LEADER_STATS[stat]} recorded yet this season."
 
     rows.sort(key=lambda r: r[0], reverse=True)
     label = LEADER_STATS[stat]
-    title = f"{pos} " if pos else ""
+    title = ("Rookie " if rookies_only else "") + (f"{pos} " if pos else "")
     out = [f"🏆 **{year} Leaders — {title}{label}** (through Week {max(1, _current_nfl_week() - 1)})"]
     for rank, (value, p, gp) in enumerate(rows[:max(1, min(top_n, 25))], 1):
         games = f", {_fmt_num(gp)} GP" if gp else ""
@@ -1373,7 +1508,9 @@ def get_player_profile_smart(user_input: str, team: Optional[str] = None) -> Uni
     # LAYER 2: College Prospects (Stats & Draft)
     # Loaded from data/prospects.json — add entries there to expand coverage
     # ---------------------------------------------------------
-    if q in _PROSPECTS:
+    # Only for players not in the NFL yet — a drafted prospect (e.g. Travis
+    # Hunter, now a Jaguar) must get his NFL profile, not his college card.
+    if q in _PROSPECTS and not _find_players(q):
         p = _PROSPECTS[q]
         return (f"### 🎓 Prospect: {p['name']}\n"
                 f"- **School:** {p['school']} | **Pos:** {p['pos']}\n"
