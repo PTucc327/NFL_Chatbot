@@ -51,6 +51,7 @@ from src.api_client import (
     get_week_schedule,
     get_team_schedule,
     get_league_leaders,
+    get_box_score,
     get_player_team,
     current_nfl_season_year,
     current_nfl_week,
@@ -80,7 +81,7 @@ VALID_POSITIONS = {"QB", "RB", "WR", "TE", "K", "DE", "DT", "LB", "CB", "S"}
 _WAIVER_POSITIONS = {"QB", "RB", "WR", "TE"}
 
 # Intents answered at team level; a named player's team fills in when absent.
-_TEAM_LEVEL_INTENTS = {"schedule", "last_game", "odds", "scores", "standings", "news"}
+_TEAM_LEVEL_INTENTS = {"schedule", "last_game", "box_score", "odds", "scores", "standings", "news"}
 
 # Keywords that indicate a sit/start question rather than a raw stats lookup.
 _SIT_START_KEYWORDS = frozenset({"start", "sit", "bench", "lineup", "waiver", "should i"})
@@ -111,6 +112,7 @@ class IntentHandler(Protocol):
         season: Optional[int],
         opponent: Optional[str],
         stat: Optional[str],
+        week: Optional[int],
     ) -> Any: ...
 
 
@@ -395,6 +397,7 @@ Schema:
   "player_b": "second player full name for comparisons or trades, or null",
   "opponent": "second TEAM full name for team-vs-team questions, or null",
   "stat": "for leaders: one of pass_yd, pass_td, pass_int, rush_yd, rush_td, rec, rec_yd, rec_td, pts_ppr, pts_half_ppr, pts_std — or null",
+  "week": "regular-season week number as integer when the user names one, or null",
   "season": "4-digit season year as integer, or null",
   "raw_query": "the original user query unchanged"
 }
@@ -410,6 +413,9 @@ Allowed intents (pick ALL that apply — multi-intent is supported):
                 ("when do the Cowboys play the Eagles"), OR — with no team —
                 this week's league slate ("Thursday Night Football tonight",
                 "who's on bye", "what games are on Sunday")
+  box_score   — details of a specific game that has started or finished: box score,
+                recap, "how did X beat Y", "who scored", "game stats", "what
+                happened in the game", live in-game stats
   leaders     — league or position leaders and rankings ("who leads in passing
                 yards", "top 5 fantasy QBs", "most receiving TDs")
   player      — player profile, career stats, or scouting report
@@ -450,7 +456,9 @@ Rules:
 - For leaders: set "stat" (fantasy rankings → pts_ppr unless half-PPR/standard is
   named) and put a position filter (QB, RB, WR, TE, K) in "player". "Top N" goes
   nowhere — the app shows the top 10.
-- "How did X beat/lose to Y", "what was the score" about a past game → "last_game".
+- "How did X beat/lose to Y", "recap", "box score", "who scored", "what happened in
+  the X game" → "box_score" (team = first team, opponent = second team if named,
+  week if named). A bare "what was the score of the X game" → "last_game".
 - If the query is ambiguous, pick the most likely intent.
 - Use "news" when a specific team is named or implied. Use "league_news"
   when the question is about the NFL broadly — no specific team, phrases
@@ -616,6 +624,13 @@ def _handle_schedule(team, _player, _player_b, _raw_query, _season, opponent=Non
     return get_team_schedule(team, opponent=opponent) if team else get_week_schedule()
 
 
+def _handle_box_score(team, _player, _player_b, _raw_query, _season,
+                      opponent=None, _stat=None, week=None, *_):
+    if not team:
+        return "Which game? Name a team (and the opponent or week if you like)."
+    return get_box_score(team, opponent=opponent, week=week)
+
+
 def _handle_leaders(_team, player, _player_b, _raw_query, _season, _opponent=None, stat=None, *_):
     # Position filter rides in the player slot, as for roster/waiver.
     return get_league_leaders(stat or "pts_ppr", position=_position_hint(player, VALID_POSITIONS))
@@ -639,6 +654,7 @@ _INTENT_DISPATCH: Dict[str, IntentHandler] = {
     "league_news": lambda *_: get_league_headlines(),
     "schedule":    _handle_schedule,
     "leaders":     _handle_leaders,
+    "box_score":   _handle_box_score,
     "injury":      lambda t, p, *_: get_player_injury(p or t) if (p or t) else "Which player's injury status?",
     "odds":        lambda t, *_: get_game_odds(t) if t else "Which team's betting lines?",
     "player":      _handle_player,
@@ -654,12 +670,12 @@ _INTENT_DISPATCH: Dict[str, IntentHandler] = {
 def _fetch_one(intent: str, team: Optional[str], player: Optional[str],
                player_b: Optional[str], raw_query: str,
                season: Optional[int] = None, opponent: Optional[str] = None,
-               stat: Optional[str] = None) -> tuple[str, Any]:
+               stat: Optional[str] = None, week: Optional[int] = None) -> tuple[str, Any]:
     """Fetch data for a single intent. Runs in a thread pool."""
     try:
         handler = _INTENT_DISPATCH.get(intent)
         if handler:
-            return intent, handler(team, player, player_b, raw_query, season, opponent, stat)
+            return intent, handler(team, player, player_b, raw_query, season, opponent, stat, week)
         return intent, None  # "general" and unknown intents — Gemini answers from knowledge
     except Exception as e:
         logger.error(f"Dispatch error for intent '{intent}': {e}")
@@ -683,6 +699,7 @@ def _dispatch(parsed: Dict[str, Any]) -> tuple[Dict[str, Any], Optional[Dict[str
     season   = parsed.get("season")
     opponent = parsed.get("opponent")
     stat     = parsed.get("stat")
+    week     = parsed.get("week") if isinstance(parsed.get("week"), int) else None
     raw      = parsed.get("raw_query", "")
 
     # "Is Mahomes playing this week?" — team-level data for a named player
@@ -697,7 +714,7 @@ def _dispatch(parsed: Dict[str, Any]) -> tuple[Dict[str, Any], Optional[Dict[str
     results: Dict[str, Any] = {}
     pool = ThreadPoolExecutor(max_workers=min(len(intents), 5))
     futures = {
-        pool.submit(_fetch_one, intent, team, player, player_b, raw, season, opponent, stat): intent
+        pool.submit(_fetch_one, intent, team, player, player_b, raw, season, opponent, stat, week): intent
         for intent in intents
     }
     try:
@@ -743,6 +760,10 @@ Guidelines:
 - For player comparisons: highlight the key statistical and contextual differences.
 - For trade advice: give a clear verdict (Accept/Decline/Counter) first, then reasoning.
 - For waiver wire: list players in rank order, give a one-line reason for each pickup.
+- For box scores: write a short game recap — final score and where it was played
+  first, then the turning points from the scoring plays, the standout performers,
+  and the team stat that decided it (turnovers, 3rd downs, red zone). Keep the
+  line-score table if it helps. Only state home/away and venue as given.
 - If data is missing, say so and suggest an alternative.
 - Keep responses under 300 words unless detail is requested.
 - If the user's question has nothing to do with football, briefly say that's
@@ -881,7 +902,7 @@ def _update_conv_state(parsed: Dict[str, Any],
     # discussion).  If that behaviour ever needs to change, add those intents
     # to the set below.
     if intents & {"scores", "standings", "news", "league_news", "schedule",
-                  "last_game", "injury", "odds", "roster"}:
+                  "last_game", "box_score", "leaders", "injury", "odds", "roster"}:
         return {}
 
     return current_state  # preserve state for ambiguous intents

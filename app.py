@@ -539,7 +539,7 @@ with st.sidebar:
             sidebar_preset = {"intents": ["schedule"], "team": team_choice}
         if c4.button("⏮️ Last Game", use_container_width=True):
             sidebar_prompt = f"How did the {team_choice} do in their last game?"
-            sidebar_preset = {"intents": ["last_game"], "team": team_choice}
+            sidebar_preset = {"intents": ["box_score"], "team": team_choice}
         c5, c6 = st.columns(2)
         if c5.button("🔴 Live Scores", use_container_width=True):
             sidebar_prompt = "What are the latest scores from today's games?"

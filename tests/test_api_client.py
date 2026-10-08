@@ -927,3 +927,102 @@ class TestStatsCache:
             _client_mod._get_stats(2026, 3)
             _client_mod._get_stats(2026, 5)
         assert mock_fetch.call_count == 3  # only week 5 was re-fetched
+
+
+# ─── Box scores ───────────────────────────────────────────────────
+
+_BOX_TEAMS = {}
+for _m in (_team_meta("19", "New York Giants", "nyg"), _team_meta("22", "Arizona Cardinals", "ari"),
+           _team_meta("12", "Kansas City Chiefs", "kc")):
+    _m["schedule_url"] = f"sched/{_m['id']}"
+    _BOX_TEAMS[_m["displayName"].lower()] = _m
+    _BOX_TEAMS[_m["abbr"]] = _m
+    _BOX_TEAMS[_m["id"]] = _m
+
+
+def _sched_event(eid, week, opp_id, state):
+    return {"id": eid, "date": "2026-10-04T17:00Z", "week": {"number": week},
+            "competitions": [{"status": {"type": {"state": state}},
+                              "competitors": [{"team": {"id": "19"}}, {"team": {"id": opp_id}}]}]}
+
+
+_GIANTS_SCHEDULE = {"byeWeek": 9, "events": [
+    _sched_event("e3", 3, "12", "post"),
+    _sched_event("e4", 4, "22", "post"),
+    _sched_event("e5", 5, "12", "pre"),
+]}
+
+_SUMMARY = {
+    "header": {"competitions": [{"status": {"type": {"state": "post", "detail": "Final"}},
+        "competitors": [
+            {"homeAway": "away", "score": "24", "team": {"abbreviation": "ARI", "displayName": "Arizona Cardinals"},
+             "linescores": [{"displayValue": v} for v in ("14", "3", "7", "0")]},
+            {"homeAway": "home", "score": "36", "team": {"abbreviation": "NYG", "displayName": "New York Giants"},
+             "linescores": [{"displayValue": v} for v in ("3", "16", "8", "9")]}]}]},
+    "gameInfo": {"venue": {"fullName": "MetLife Stadium"}},
+    "boxscore": {"teams": [
+        {"team": {"abbreviation": "ARI"}, "statistics": [{"label": "Total Yards", "displayValue": "270"},
+                                                         {"label": "Turnovers", "displayValue": "3"}]},
+        {"team": {"abbreviation": "NYG"}, "statistics": [{"label": "Total Yards", "displayValue": "319"},
+                                                         {"label": "Turnovers", "displayValue": "3"}]}]},
+    "leaders": [{"team": {"abbreviation": "NYG"}, "leaders": [
+        {"displayName": "Passing Yards", "leaders": [
+            {"displayValue": "18/29, 250 YDS", "athlete": {"displayName": "Jameis Winston"}}]}]}],
+    "scoringPlays": [{"period": {"number": 4}, "clock": {"displayValue": "0:00"},
+                      "team": {"abbreviation": "NYG"}, "text": "Deonte Banks 98 Yd Interception Return",
+                      "awayScore": 24, "homeScore": 36}],
+}
+
+
+class TestBoxScore:
+    @pytest.fixture(autouse=True)
+    def box_env(self):
+        _client_mod._TEAM_CACHE = _BOX_TEAMS
+        _client_mod._TEAM_CACHE_LAST = datetime.datetime.now().timestamp() + 9999
+        _client_mod._SUMMARY_CACHE.clear()
+        self.calls = []
+
+        def fake_fetch(url, params=None, headers=None):
+            self.calls.append((url, params))
+            if url.startswith("sched/"):
+                return _GIANTS_SCHEDULE
+            return _SUMMARY
+        with patch.object(_client_mod, "fetch_json", side_effect=fake_fetch):
+            yield
+        _client_mod._TEAM_CACHE = {}
+        _client_mod._TEAM_CACHE_LAST = 0
+        _client_mod._SUMMARY_CACHE.clear()
+
+    def test_latest_started_game_is_used(self):
+        _client_mod.get_box_score("New York Giants")
+        assert ("e4" in str(self.calls[-1][1]))  # week 5 hasn't started
+
+    def test_opponent_selects_matchup(self):
+        _client_mod.get_box_score("New York Giants", opponent="Kansas City Chiefs")
+        assert self.calls[-1][1] == {"event": "e3"}
+
+    def test_week_selects_game(self):
+        _client_mod.get_box_score("New York Giants", week=3)
+        assert self.calls[-1][1] == {"event": "e3"}
+
+    def test_output_has_line_score_stats_leaders_scoring_and_venue(self):
+        out = _client_mod.get_box_score("New York Giants")
+        assert "Arizona Cardinals 24 @ New York Giants 36" in out
+        assert "MetLife Stadium" in out
+        assert "| NYG | 3 | 16 | 8 | 9 | **36** |" in out
+        assert "| Total Yards | 270 | 319 |" in out
+        assert "Jameis Winston" in out
+        assert "98 Yd Interception Return" in out and "(ARI 24-36 NYG)" in out
+
+    def test_bye_week_is_explained(self):
+        assert "on bye in Week 9" in _client_mod.get_box_score("New York Giants", week=9)
+
+    def test_no_game_yet_against_opponent(self):
+        out = _client_mod.get_box_score("New York Giants", opponent="Arizona Cardinals", week=5)
+        assert "haven't played" in out
+
+    def test_final_summary_is_cached(self):
+        _client_mod.get_box_score("New York Giants")
+        _client_mod.get_box_score("New York Giants")
+        summary_calls = [c for c in self.calls if not c[0].startswith("sched/")]
+        assert len(summary_calls) == 1

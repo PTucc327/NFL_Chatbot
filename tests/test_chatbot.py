@@ -705,3 +705,22 @@ class TestCharts:
             _, chart = chatbot._dispatch({"intents": ["fantasy", "comparison"],
                                           "raw_query": "x"})
         assert chart is two
+
+
+class TestBoxScoreRouting:
+    def test_box_score_passes_opponent_and_week(self):
+        _api_mock.get_box_score.reset_mock()
+        chatbot._dispatch({"intents": ["box_score"], "team": "New York Giants",
+                           "opponent": "Arizona Cardinals", "week": 4, "raw_query": "x"})
+        _api_mock.get_box_score.assert_called_once_with(
+            "New York Giants", opponent="Arizona Cardinals", week=4)
+
+    def test_box_score_without_team_asks(self):
+        results, _ = chatbot._dispatch({"intents": ["box_score"], "raw_query": "x"})
+        assert "Which game" in results["box_score"]
+
+    def test_non_integer_week_is_ignored(self):
+        _api_mock.get_box_score.reset_mock()
+        chatbot._dispatch({"intents": ["box_score"], "team": "Giants", "week": "last",
+                           "raw_query": "x"})
+        _api_mock.get_box_score.assert_called_once_with("Giants", opponent=None, week=None)

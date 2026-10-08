@@ -50,6 +50,7 @@ ENDPOINTS = {
     "sleeper_stats_week": "https://api.sleeper.app/v1/stats/nfl/regular/{year}/{week}",
     "sleeper_trending_add": "https://api.sleeper.app/v1/players/nfl/trending/add",
     "sleeper_state":      "https://api.sleeper.app/v1/state/nfl",
+    "summary":        "https://site.api.espn.com/apis/site/v2/sports/football/nfl/summary",
 }
 
 def _current_nfl_season_year() -> int:
@@ -532,8 +533,19 @@ def get_last_game(team_name: str) -> str:
     if not past: return f"I can't seem to find the last score for the {meta['displayName']}."
     
     comp = past[0].get("competitions", [{}])[0]
-    scores = [f"{c['team']['displayName']} {c.get('score', {}).get('displayValue', '0')}" for c in comp.get("competitors", [])]
-    return f"In their last outing, here's how it finished: {' - '.join(scores)} ({to_et(parse_iso_datetime(past[0].get('date')))}). 🏟️"
+    teams = comp.get("competitors", [])
+    away = next((c for c in teams if c.get("homeAway") == "away"), None)
+    home = next((c for c in teams if c.get("homeAway") == "home"), None)
+    when = to_et(parse_iso_datetime(past[0].get("date")))
+    if not away or not home:
+        scores = [f"{c['team']['displayName']} {c.get('score', {}).get('displayValue', '0')}" for c in teams]
+        return f"In their last outing, here's how it finished: {' - '.join(scores)} ({when}). 🏟️"
+    score = lambda c: (c.get("score") or {}).get("displayValue", "0")
+    venue = (comp.get("venue") or {}).get("fullName")
+    # State home/away explicitly — without it the AI guessed the location.
+    return (f"In their last outing: {away['team']['displayName']} {score(away)} @ "
+            f"{home['team']['displayName']} {score(home)} (final, {when}"
+            + (f", at {venue}" if venue else "") + "). 🏟️")
 
 
 def _fmt_num(value: Any) -> str:
@@ -676,6 +688,155 @@ def get_team_schedule(team_name: str, opponent: Optional[str] = None) -> str:
             return (f"The {meta['displayName']} don't play the {opp_meta['displayName']} "
                     f"in the regular season this year.")
         return f"I couldn't find any games on the {meta['displayName']} schedule."
+    return "\n".join(out)
+
+
+# ----------------------------------------------------
+# Box Scores
+# ----------------------------------------------------
+# ESPN's per-game summary (~600 KB) has the line score, team stats, leaders
+# and scoring plays. Final games are cached for a day, live ones briefly.
+_SUMMARY_FINAL_TTL = 60 * 60 * 24
+_SUMMARY_LIVE_TTL = 60
+_SUMMARY_CACHE: Dict[str, tuple] = {}   # event id -> (fetched_at, final?, summary)
+_SUMMARY_CACHE_LOCK = threading.Lock()
+
+# Team stats worth comparing, in display order (ESPN labels).
+_BOX_TEAM_STATS = (
+    "Total Yards", "Passing", "Rushing", "Comp/Att", "Yards per Play",
+    "1st Downs", "3rd down efficiency", "4th down efficiency",
+    "Red Zone (Made-Att)", "Turnovers", "Sacks-Yards Lost", "Penalties", "Possession",
+)
+
+
+def _get_game_summary(event_id: str) -> Optional[Dict[str, Any]]:
+    with _SUMMARY_CACHE_LOCK:
+        hit = _SUMMARY_CACHE.get(event_id)
+    if hit and time.time() - hit[0] < (_SUMMARY_FINAL_TTL if hit[1] else _SUMMARY_LIVE_TTL):
+        return hit[2]
+    data = fetch_json(ENDPOINTS["summary"], params={"event": event_id})
+    if not isinstance(data, dict) or "__error" in data or "boxscore" not in data:
+        return None
+    comp = (data.get("header") or {}).get("competitions", [{}])[0]
+    final = comp.get("status", {}).get("type", {}).get("state") == "post"
+    with _SUMMARY_CACHE_LOCK:
+        _SUMMARY_CACHE[event_id] = (time.time(), final, data)
+    return data
+
+
+def _find_game(team_meta: Dict[str, Any], opponent: Optional[str],
+               week: Optional[int]) -> tuple:
+    """
+    (event, error message) for a team's game: the given week, else the most
+    recent game against `opponent`, else the latest game that has started.
+    """
+    data = fetch_json(team_meta["schedule_url"])
+    if "__error" in data:
+        return None, f"I'm having trouble pulling the {team_meta['displayName']} schedule right now."
+    opp_meta = find_team(opponent) if opponent else None
+    started = []
+    for ev in data.get("events", []):
+        comp = ev.get("competitions", [{}])[0]
+        if comp.get("status", {}).get("type", {}).get("state") not in ("in", "post"):
+            continue
+        ids = {str(c.get("team", {}).get("id")) for c in comp.get("competitors", [])}
+        if opp_meta and opp_meta["id"] not in ids:
+            continue
+        if week and (ev.get("week") or {}).get("number") != week:
+            continue
+        started.append(ev)
+    if not started:
+        if week and data.get("byeWeek") == week:
+            return None, f"The {team_meta['displayName']} were on bye in Week {week}."
+        what = f" against the {opp_meta['displayName']}" if opp_meta else ""
+        when = f" in Week {week}" if week else " yet this season"
+        return None, f"The {team_meta['displayName']} haven't played{what}{when}."
+    return started[-1], None
+
+
+def get_box_score(team_name: str, opponent: Optional[str] = None,
+                  week: Optional[int] = None) -> str:
+    """
+    Box score for a team's game (latest, a given week, or the latest vs an
+    opponent): line score, team stat comparison, leaders, scoring plays.
+    Works mid-game for live box scores.
+    """
+    meta = find_team(team_name)
+    if not meta:
+        return f"I couldn't find a team named '{team_name}'."
+    event, error = _find_game(meta, opponent, week)
+    if error:
+        return error
+    summary = _get_game_summary(str(event.get("id")))
+    if not summary:
+        return "I couldn't load the box score for that game right now."
+
+    comp = summary["header"]["competitions"][0]
+    teams = comp.get("competitors", [])
+    away = next((t for t in teams if t.get("homeAway") == "away"), teams[0])
+    home = next((t for t in teams if t.get("homeAway") == "home"), teams[-1])
+    status = comp.get("status", {}).get("type", {})
+    detail = status.get("detail") or status.get("shortDetail", "")
+    venue = ((summary.get("gameInfo") or {}).get("venue") or {}).get("fullName", "")
+    week_no = (event.get("week") or {}).get("number")
+    when = to_et(parse_iso_datetime(event.get("date")))
+    abbr = lambda t: t.get("team", {}).get("abbreviation", "?")
+    name = lambda t: t.get("team", {}).get("displayName", "?")
+
+    live = " 🔴 LIVE" if status.get("state") == "in" else ""
+    out = [f"📦 **Box Score{live}: {name(away)} {away.get('score', '?')} @ "
+           f"{name(home)} {home.get('score', '?')}** ({detail})",
+           " · ".join(x for x in (f"Week {week_no}" if week_no else "", when,
+                                  f"at {venue}" if venue else "") if x)]
+
+    # Line score by quarter
+    quarters = max(len(away.get("linescores", [])), len(home.get("linescores", [])))
+    if quarters:
+        labels = [f"Q{i}" if i <= 4 else f"OT{i - 4 if quarters > 5 else ''}"
+                  for i in range(1, quarters + 1)]
+        out += ["", "| Team | " + " | ".join(labels) + " | Total |",
+                "|---|" + "---|" * (quarters + 1)]
+        for t in (away, home):
+            ls = [l.get("displayValue", "0") for l in t.get("linescores", [])]
+            ls += ["-"] * (quarters - len(ls))
+            out.append(f"| {abbr(t)} | " + " | ".join(ls) + f" | **{t.get('score', '?')}** |")
+
+    # Team stat comparison (boxscore.teams is ordered away, home)
+    box_teams = (summary.get("boxscore") or {}).get("teams", [])
+    if len(box_teams) == 2:
+        stats = [{s.get("label"): s.get("displayValue") for s in bt.get("statistics", [])}
+                 for bt in box_teams]
+        heads = [bt.get("team", {}).get("abbreviation", "?") for bt in box_teams]
+        out += ["", f"| Team stats | {heads[0]} | {heads[1]} |", "|---|---|---|"]
+        for label in _BOX_TEAM_STATS:
+            if label in stats[0] or label in stats[1]:
+                out.append(f"| {label} | {stats[0].get(label, '-')} | {stats[1].get(label, '-')} |")
+
+    # Leaders per team
+    leaders = summary.get("leaders", [])
+    if leaders:
+        out.append("\n**Leaders**")
+        for team_leaders in leaders:
+            team_abbr = (team_leaders.get("team") or {}).get("abbreviation", "?")
+            parts = []
+            for cat in team_leaders.get("leaders", []):
+                top = (cat.get("leaders") or [{}])[0]
+                athlete = (top.get("athlete") or {}).get("displayName")
+                if athlete:
+                    parts.append(f"{cat.get('displayName', '')}: {athlete} ({top.get('displayValue', '')})")
+            if parts:
+                out.append(f"- **{team_abbr}** — " + "; ".join(parts))
+
+    # Scoring summary
+    plays = summary.get("scoringPlays", [])
+    if plays:
+        out.append("\n**Scoring**")
+        for sp in plays:
+            q = (sp.get("period") or {}).get("number", "?")
+            clock = (sp.get("clock") or {}).get("displayValue", "")
+            team_abbr = (sp.get("team") or {}).get("abbreviation", "?")
+            out.append(f"- Q{q} {clock} {team_abbr}: {sp.get('text', '')} "
+                       f"({abbr(away)} {sp.get('awayScore')}-{sp.get('homeScore')} {abbr(home)})")
     return "\n".join(out)
 
 
