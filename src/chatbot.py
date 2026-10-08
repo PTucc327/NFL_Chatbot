@@ -18,6 +18,7 @@ import datetime
 import json
 import logging
 import os
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -52,6 +53,7 @@ from src.api_client import (
     get_team_schedule,
     get_league_leaders,
     get_box_score,
+    get_playoff_picture,
     get_player_team,
     current_nfl_season_year,
     current_nfl_week,
@@ -405,7 +407,10 @@ Schema:
 Allowed intents (pick ALL that apply — multi-intent is supported):
   scores      — live or recent game scores
   last_game   — result of the most recently completed game
-  standings   — win/loss records and division/conference rankings
+  standings   — win/loss records and division/conference rankings ("NFC East
+                standings", "where are the Ravens in the division")
+  playoffs    — playoff picture, seeding, wild card race, "who's in the playoffs",
+                "would the Bills make the playoffs if the season ended today"
   news        — team or league news and headlines
   league_news — general NFL news not tied to one team ("around the league",
                 "biggest storylines", "what's happening in the NFL")
@@ -624,6 +629,33 @@ def _handle_schedule(team, _player, _player_b, _raw_query, _season, opponent=Non
     return get_team_schedule(team, opponent=opponent) if team else get_week_schedule()
 
 
+_DIVISION_RE = re.compile(r"\b(AFC|NFC)\s+(East|North|South|West)\b", re.I)
+_CONFERENCE_RE = re.compile(r"\b(AFC|NFC)\b", re.I)
+
+
+def _conference_in(text: str) -> Optional[str]:
+    m = _CONFERENCE_RE.search(text or "")
+    return m.group(1).upper() if m else None
+
+
+def _handle_standings(team, _player, _player_b, raw_query, *_):
+    # Division names ("NFC East") come from the raw text; the extraction
+    # schema has no slot for them and the regex is exact.
+    div = _DIVISION_RE.search(raw_query or "")
+    if div:
+        return get_standings(division=f"{div.group(1).upper()} {div.group(2).title()}")
+    if team:
+        return get_standings(team)
+    return get_standings(conference=_conference_in(raw_query))
+
+
+def _handle_playoffs(team, _player, _player_b, raw_query, *_):
+    result = get_playoff_picture(conference=_conference_in(raw_query))
+    if team:  # "would the Bills make it?" — add their division/seed context
+        result += "\n\n" + get_standings(team)
+    return result
+
+
 def _handle_box_score(team, _player, _player_b, _raw_query, _season,
                       opponent=None, _stat=None, week=None, *_):
     if not team:
@@ -649,7 +681,8 @@ def _handle_history(team, player, _player_b, _raw_query, season, *_):
 _INTENT_DISPATCH: Dict[str, IntentHandler] = {
     "scores":      lambda t, *_: get_live_scores(t),
     "last_game":   lambda t, *_: get_last_game(t) if t else "Please specify a team.",
-    "standings":   lambda t, *_: get_standings(t),
+    "standings":   _handle_standings,
+    "playoffs":    _handle_playoffs,
     "news":        lambda t, *_: get_team_news(t or "NFL"),
     "league_news": lambda *_: get_league_headlines(),
     "schedule":    _handle_schedule,
@@ -902,7 +935,7 @@ def _update_conv_state(parsed: Dict[str, Any],
     # discussion).  If that behaviour ever needs to change, add those intents
     # to the set below.
     if intents & {"scores", "standings", "news", "league_news", "schedule",
-                  "last_game", "box_score", "leaders", "injury", "odds", "roster"}:
+                  "last_game", "box_score", "leaders", "playoffs", "injury", "odds", "roster"}:
         return {}
 
     return current_state  # preserve state for ambiguous intents

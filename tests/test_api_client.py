@@ -1026,3 +1026,81 @@ class TestBoxScore:
         _client_mod.get_box_score("New York Giants")
         summary_calls = [c for c in self.calls if not c[0].startswith("sched/")]
         assert len(summary_calls) == 1
+
+
+# ─── Division standings & playoff picture ─────────────────────────
+
+def _entry(name, abbr, w, l, seed, div="1-0", diff="+5", streak="W1", clincher=None):
+    stats = [{"name": "wins", "displayValue": str(w)}, {"name": "losses", "displayValue": str(l)},
+             {"name": "ties", "displayValue": "0"}, {"name": "playoffSeed", "displayValue": str(seed)},
+             {"name": "divisionRecord", "displayValue": div},
+             {"name": "differential", "displayValue": diff}, {"name": "streak", "displayValue": streak}]
+    if clincher:
+        stats.append({"name": "clincher", "displayValue": clincher})
+    return {"team": {"displayName": name, "abbreviation": abbr}, "stats": stats}
+
+
+def _div(name, entries):
+    return {"name": name, "standings": {"entries": entries}}
+
+
+# AFC: 4 divisions x 2 teams is enough for seeds 1-8.
+LEVEL3_STANDINGS = {"children": [
+    {"name": "American Football Conference", "children": [
+        _div("AFC East", [_entry("Miami Dolphins", "MIA", 0, 4, 13), _entry("Buffalo Bills", "BUF", 3, 1, 3)]),
+        _div("AFC North", [_entry("Baltimore Ravens", "BAL", 3, 1, 5), _entry("Cleveland Browns", "CLE", 3, 1, 4)]),
+        _div("AFC South", [_entry("Jacksonville Jaguars", "JAX", 3, 1, 2), _entry("Indianapolis Colts", "IND", 2, 2, 8)]),
+        _div("AFC West", [_entry("Kansas City Chiefs", "KC", 4, 0, 1, clincher="z"),
+                          _entry("Las Vegas Raiders", "LV", 3, 1, 6)]),
+    ]},
+    {"name": "National Football Conference", "children": [
+        _div("NFC East", [_entry("Philadelphia Eagles", "PHI", 2, 2, 11), _entry("New York Giants", "NYG", 3, 1, 3)]),
+    ]},
+]}
+
+
+class TestDivisionStandings:
+    @pytest.fixture(autouse=True)
+    def standings(self):
+        with patch.object(_client_mod, "fetch_json", return_value=LEVEL3_STANDINGS) as f, \
+             patch.object(_client_mod, "_current_nfl_week", return_value=5):
+            self.fetch = f
+            yield
+
+    def test_division_table_sorted_by_record(self):
+        out = _client_mod.get_standings(division="NFC East")
+        assert "NFC East Standings" in out
+        assert out.index("New York Giants") < out.index("Philadelphia Eagles")
+        assert "| New York Giants | 3-1 | 1-0 | +5 | W1 | 3 |" in out
+
+    def test_team_shows_division_and_seed(self):
+        with patch.object(_client_mod, "find_team", return_value={"displayName": "Baltimore Ravens"}):
+            out = _client_mod.get_standings("Ravens")
+        assert "AFC North Standings" in out
+        assert "**Baltimore Ravens**" in out  # highlighted
+        assert "#5 seed** in the AFC (in playoff position)" in out
+
+    def test_team_outside_playoffs(self):
+        with patch.object(_client_mod, "find_team", return_value={"displayName": "Philadelphia Eagles"}):
+            out = _client_mod.get_standings("Eagles")
+        assert "outside the playoff spots" in out
+
+    def test_conference_filter(self):
+        out = _client_mod.get_standings(conference="nfc")
+        assert "NFC East" in out and "AFC East" not in out
+
+    def test_requests_division_level_data(self):
+        _client_mod.get_standings()
+        assert self.fetch.call_args.kwargs.get("params") == {"level": 3}
+
+    def test_playoff_picture_seeds_roles_and_hunt(self):
+        out = _client_mod.get_playoff_picture(conference="AFC")
+        assert "1. Kansas City Chiefs (4-0) — AFC West leader, clinched #1 seed" in out
+        assert "5. Baltimore Ravens (3-1) — wild card" in out
+        assert "*In the hunt:* Indianapolis Colts (2-2, 1 GB)" in out
+        assert "NFC" not in out.split("Playoff Picture")[1]
+
+    def test_playoff_picture_both_conferences(self):
+        out = _client_mod.get_playoff_picture()
+        assert "**AFC**" in out and "**NFC**" in out
+        assert "heading into Week 5" in out

@@ -724,3 +724,38 @@ class TestBoxScoreRouting:
         chatbot._dispatch({"intents": ["box_score"], "team": "Giants", "week": "last",
                            "raw_query": "x"})
         _api_mock.get_box_score.assert_called_once_with("Giants", opponent=None, week=None)
+
+
+class TestStandingsRouting:
+    def _run(self, **parsed):
+        base = {"intents": [], "team": None, "player": None, "player_b": None, "raw_query": ""}
+        return chatbot._dispatch({**base, **parsed})[0]
+
+    def test_division_detected_from_text(self):
+        _api_mock.get_standings.reset_mock()
+        self._run(intents=["standings"], raw_query="what are the nfc east standings")
+        _api_mock.get_standings.assert_called_once_with(division="NFC East")
+
+    def test_team_standings(self):
+        _api_mock.get_standings.reset_mock()
+        self._run(intents=["standings"], team="Baltimore Ravens", raw_query="where are the ravens")
+        _api_mock.get_standings.assert_called_once_with("Baltimore Ravens")
+
+    def test_conference_standings(self):
+        _api_mock.get_standings.reset_mock()
+        self._run(intents=["standings"], raw_query="AFC standings please")
+        _api_mock.get_standings.assert_called_once_with(conference="AFC")
+
+    def test_word_boundary_avoids_false_conference(self):
+        # "nfcx" / "safc" must not count as a conference
+        assert chatbot._conference_in("safcxyz") is None
+        assert chatbot._conference_in("the NFC race") == "NFC"
+
+    def test_playoffs_with_team_adds_division_context(self):
+        _api_mock.get_playoff_picture.reset_mock()
+        _api_mock.get_playoff_picture.return_value = "Picture"
+        _api_mock.get_standings.return_value = "Bills division"
+        out = self._run(intents=["playoffs"], team="Buffalo Bills",
+                        raw_query="would the bills make the AFC playoffs")
+        _api_mock.get_playoff_picture.assert_called_once_with(conference="AFC")
+        assert out["playoffs"] == "Picture\n\nBills division"

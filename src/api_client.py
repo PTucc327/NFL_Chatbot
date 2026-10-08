@@ -435,51 +435,155 @@ def get_live_scores(team_name: Optional[str] = None):
 # Standings (Narrative & Multi-mode)
 # ----------------------------------------------------
 
-def get_standings(team_query: Optional[str] = None) -> str:
-    """Parses and returns record-based standings."""
-    data = fetch_json(ENDPOINTS["standings"])
+_CONF_SHORT = {"American Football Conference": "AFC", "National Football Conference": "NFC"}
+# ESPN clincher codes, shown once teams start clinching late in the season.
+_CLINCH = {"z": "clinched #1 seed", "*": "clinched #1 seed", "y": "clinched division",
+           "x": "clinched playoff berth", "e": "eliminated"}
+
+
+def _standings_row(entry: Dict[str, Any]) -> Dict[str, Any]:
+    stats = {s.get("name"): s.get("displayValue") for s in entry.get("stats", [])}
+    team = entry.get("team", {})
+    w, l, t = stats.get("wins", "0"), stats.get("losses", "0"), stats.get("ties", "0")
+    try:
+        seed = int(float(stats.get("playoffSeed") or 0)) or None
+    except ValueError:
+        seed = None
+    return {
+        "name": team.get("displayName", "Unknown"),
+        "abbr": team.get("abbreviation", ""),
+        "w": int(float(w)), "l": int(float(l)), "t": int(float(t)),
+        "record": f"{w}-{l}" + (f"-{t}" if t not in ("0", "0.000") else ""),
+        "pct": stats.get("winPercent", ""),
+        "div": stats.get("divisionRecord") or stats.get("vs. Div.", ""),
+        "diff": stats.get("differential") or stats.get("pointDifferential", ""),
+        "streak": stats.get("streak", ""),
+        "seed": seed,
+        "clinch": _CLINCH.get((stats.get("clincher") or "").lower(), ""),
+    }
+
+
+def _standings_groups(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    [{"conf": "AFC", "division": "AFC East" or None, "rows": [...]}].
+    Handles division-level data (level=3: conference -> division -> entries)
+    and plain conference-level data (conference -> entries).
+    """
+    groups = []
+    for conf in data.get("children", []):
+        conf_name = _CONF_SHORT.get(conf.get("name", ""), conf.get("name", ""))
+        divisions = conf.get("children") or []
+        if divisions:
+            for div in divisions:
+                rows = [_standings_row(e) for e in div.get("standings", {}).get("entries", [])]
+                groups.append({"conf": conf_name, "division": div.get("name"), "rows": rows})
+        else:
+            rows = [_standings_row(e) for e in conf.get("standings", {}).get("entries", [])]
+            groups.append({"conf": conf_name, "division": None, "rows": rows})
+    for g in groups:
+        g["rows"].sort(key=lambda r: (-(r["w"] + 0.5 * r["t"]) / max(1, r["w"] + r["l"] + r["t"]),
+                                      r["seed"] or 99))
+    return groups
+
+
+def _standings_table(rows: List[Dict[str, Any]], highlight: Optional[str] = None) -> List[str]:
+    out = ["| Team | W-L | Div | Diff | Streak | Seed |", "|---|---|---|---|---|---|"]
+    for r in rows:
+        name = f"**{r['name']}**" if highlight and r["name"] == highlight else r["name"]
+        clinch = f" ({r['clinch']})" if r["clinch"] else ""
+        out.append(f"| {name}{clinch} | {r['record']} | {r['div'] or '-'} | {r['diff'] or '-'} | "
+                   f"{r['streak'] or '-'} | {r['seed'] or '-'} |")
+    return out
+
+
+def get_standings(team_query: Optional[str] = None, division: Optional[str] = None,
+                  conference: Optional[str] = None) -> str:
+    """
+    Division standings. `division` ("NFC East") → that division; a team →
+    its division plus its conference seed; `conference` ("AFC") → its four
+    divisions; nothing → all eight divisions.
+    """
+    data = fetch_json(ENDPOINTS["standings"], params={"level": 3})
     if "__error" in data:
         return "I'm having a bit of trouble pulling the latest standings. Check back in a bit! ⚠️"
+    groups = _standings_groups(data)
 
-    team_meta = find_team(team_query) if team_query else None
-    # ESPN standings API returns conferences directly under 'children';
-    # each conference has its own 'standings.entries' (no division sub-children)
-    conferences = data.get("children", [])
-    output = ["📊 **NFL Standings Update:**\n"]
-    found_team_info = None
-
-    for conference in conferences:
-        conf_name = conference.get("name", "")
-        entries = conference.get("standings", {}).get("entries", [])
-        if not entries:
-            continue
-
-        conf_lines = [f"**{conf_name}**"]
-        for entry in entries:
-            t_name = entry.get("team", {}).get("displayName", "Unknown")
-            stats = {s["name"]: s["displayValue"] for s in entry.get("stats", [])}
-            wins   = stats.get("wins", "0")
-            losses = stats.get("losses", "0")
-            ties   = stats.get("ties", "0")
-            record = f"{wins}-{losses}" + (f"-{ties}" if ties != "0" else "")
-
-            line = f"- {t_name}: **{record}**"
-            conf_lines.append(line)
-
-            if team_meta and team_meta["displayName"].lower() in t_name.lower():
-                found_team_info = (conf_name, conf_lines[:])
-
-        if not team_query:
-            output.extend(conf_lines)
-            output.append("")
+    if division:
+        wanted = division.strip().lower()
+        match = next((g for g in groups if (g["division"] or "").lower() == wanted), None)
+        if match:
+            return "\n".join([f"📊 **{match['division']} Standings**", ""] + _standings_table(match["rows"]))
 
     if team_query:
-        if found_team_info:
-            conf_name, lines = found_team_info
-            return f"The {team_meta['displayName']} are currently in the {conf_name}:\n" + "\n".join(lines)
+        team_meta = find_team(team_query)
+        target = (team_meta or {}).get("displayName", "")
+        for g in groups:
+            row = next((r for r in g["rows"] if target and target.lower() in r["name"].lower()), None)
+            if not row:
+                continue
+            title = g["division"] or g["conf"]
+            seed_line = ""
+            if row["seed"]:
+                status = "in playoff position" if row["seed"] <= 7 else "outside the playoff spots"
+                seed_line = f"\n{row['name']} are the **#{row['seed']} seed** in the {g['conf']} ({status})."
+            return "\n".join([f"📊 **{title} Standings**", ""]
+                             + _standings_table(g["rows"], highlight=row["name"])) + seed_line
         return f"I couldn't find the standings for '{team_query}'."
 
-    return "\n".join(output)
+    conf = conference.upper() if conference and conference.upper() in ("AFC", "NFC") else None
+    out = [f"📊 **{conf + ' ' if conf else 'NFL '}Standings Update:**"]
+    for g in groups:
+        if conf and g["conf"] != conf:
+            continue
+        out += ["", f"**{g['division'] or g['conf']}**"]
+        out += [f"- {r['name']}: **{r['record']}**" + (f" (#{r['seed']} seed)" if r["seed"] else "")
+                for r in g["rows"]]
+    return "\n".join(out)
+
+
+def get_playoff_picture(conference: Optional[str] = None) -> str:
+    """
+    Current playoff seeding per conference: seeds 1-4 (division leaders),
+    5-7 (wild cards), then the teams in the hunt with games behind the 7th
+    seed. Seeds come from ESPN, which applies the NFL tiebreakers.
+    """
+    data = fetch_json(ENDPOINTS["standings"], params={"level": 3})
+    if "__error" in data:
+        return "I'm having a bit of trouble pulling the playoff picture right now. ⚠️"
+    groups = _standings_groups(data)
+    conf = conference.upper() if conference and conference.upper() in ("AFC", "NFC") else None
+    week = None
+    try:
+        week = _current_nfl_week()
+    except Exception:
+        pass
+
+    out = [f"🏆 **NFL Playoff Picture**" + (f" (heading into Week {week})" if week else "")]
+    for conf_name in ("AFC", "NFC"):
+        if conf and conf_name != conf:
+            continue
+        rows = sorted((r for g in groups if g["conf"] == conf_name for r in g["rows"] if r["seed"]),
+                      key=lambda r: r["seed"])
+        if not rows:
+            continue
+        div_of = {r["name"]: g["division"] for g in groups if g["conf"] == conf_name for r in g["rows"]}
+        out += ["", f"**{conf_name}**"]
+        in_field = [r for r in rows if r["seed"] <= 7]
+        for r in in_field:
+            role = f"{div_of.get(r['name']) or 'division'} leader" if r["seed"] <= 4 else "wild card"
+            clinch = f", {r['clinch']}" if r["clinch"] else ""
+            out.append(f"{r['seed']}. {r['name']} ({r['record']}) — {role}{clinch}")
+        chasing = [r for r in rows if r["seed"] > 7 and r["clinch"] != "eliminated"]
+        if in_field and chasing:
+            last_in = in_field[-1]
+            hunt = []
+            for r in chasing[:4]:
+                gb = ((last_in["w"] - r["w"]) + (r["l"] - last_in["l"])) / 2
+                gb_str = "tied" if gb <= 0 else f"{_fmt_num(gb)} GB"
+                hunt.append(f"{r['name']} ({r['record']}, {gb_str})")
+            out.append("*In the hunt:* " + "; ".join(hunt))
+    return "\n".join(out)
+
 
 # ----------------------------------------------------
 # Schedules & Players (Conversational & Narrative)
