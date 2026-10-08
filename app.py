@@ -74,7 +74,7 @@ st.set_page_config(
     page_title="NFL Pro-Bot",
     page_icon="🏈",
     layout="wide",
-    initial_sidebar_state="collapsed",  # collapsed by default — mobile-first
+    initial_sidebar_state="auto",  # open on desktop, collapsed on phones
 )
 
 # ------------------------------------------------------------------
@@ -135,7 +135,7 @@ st.markdown("""
 
     .msg-time {
         font-size: 11px;
-        color: #5c6b7e;
+        color: #8b9bb0;   /* 6.1:1 on the message background (WCAG AA) */
         margin-top: 2px;
     }
 
@@ -175,11 +175,26 @@ st.markdown("""
     .player-card .pname { font-weight: 600; color: #f0f4f8; font-size: 14px; }
     .player-card .pmeta { color: #8ea0b5; font-size: 12px; margin-top: 2px; }
 
+    .hero .hero-note {
+        font-size: 11.5px;
+        color: #93a3b8;   /* 5.9:1 on the hero background */
+        margin-top: 3px;
+    }
+
     .empty-state {
         text-align: center;
         padding: 36px 20px 16px 20px;
         color: #7c8ba0;
         font-size: 14.5px;
+    }
+
+    /* Sidebar grid buttons: one line each (icon + label), compact */
+    section[data-testid="stSidebar"] div.stButton > button {
+        padding: 6px 8px;
+        font-size: 13px;
+    }
+    section[data-testid="stSidebar"] div.stButton > button p {
+        white-space: nowrap;
     }
 
     /* ── Touch targets: minimum 44px height on all buttons ─────── */
@@ -209,8 +224,8 @@ st.markdown("""
 
         div[data-testid="stChatMessage"] { padding: 4px 4px; }
 
-        /* Timestamps slightly lighter on small screens — contrast ok at this size */
-        .msg-time { color: #6b7d93; }
+        /* Clear the sidebar toggle, which floats over the top-left corner */
+        [data-testid="stMainBlockContainer"], .block-container { padding-top: 3.25rem; }
     }
 
     /* ── Mobile breakpoint (≤ 480px) ───────────────────────────── */
@@ -234,8 +249,6 @@ if "profile" not in st.session_state:
     st.session_state["profile"] = _load_prefs()  # {"team": ..., "player": ...}
 if "terms_accepted" not in st.session_state:
     st.session_state["terms_accepted"] = False
-if "onboarding_done" not in st.session_state:
-    st.session_state["onboarding_done"] = False
 # Player choices awaiting a click, and a query queued by that click. Kept in
 # session state so the Select buttons are re-rendered on the rerun their
 # click triggers — otherwise Streamlit drops the click.
@@ -265,7 +278,8 @@ if not st.session_state["terms_accepted"]:
             <strong style="color:#c8d6e5;">Before you continue:</strong><br>
             • Responses are AI-generated and may be inaccurate or delayed.<br>
             • Do not use this App for sports betting or high-stakes fantasy decisions.<br>
-            • No personal data is collected. Chat history lives only in your browser session.<br>
+            • No account needed. Your chat lives only in this browser tab.<br>
+            • Questions are answered with Google Gemini (see the Privacy Policy).<br>
             • Data is sourced from ESPN, Sleeper, and public RSS feeds.
         </div>
     </div>
@@ -296,7 +310,7 @@ if not st.session_state["terms_accepted"]:
                 "[Get a free key →](https://aistudio.google.com/app/apikey)"
             )
         st.markdown(
-            f"<p style='text-align:center; font-size:12.5px; color:#5c6b7e; margin-bottom:8px;'>"
+            f"<p style='text-align:center; font-size:12.5px; color:#8492a6; margin-bottom:8px;'>"
             f"{_legal_links}</p>",
             unsafe_allow_html=True,
         )
@@ -304,36 +318,6 @@ if not st.session_state["terms_accepted"]:
             st.session_state["terms_accepted"] = True
             st.rerun()
     st.stop()  # Render nothing else until accepted
-
-# ------------------------------------------------------------------
-# Task 8 — First-run onboarding panel (once per session only)
-# ------------------------------------------------------------------
-if not st.session_state["onboarding_done"]:
-    st.markdown("""
-    <div style="max-width:600px; margin:0 auto 18px auto; background:#1a2636;
-                border:1px solid #2f6fed; border-radius:12px; padding:20px 24px;">
-        <div style="font-size:15px; font-weight:600; color:#f4f6f8; margin-bottom:10px;">
-            👋 Here's what NFL Pro-Bot can do
-        </div>
-        <div style="font-size:13.5px; color:#8ea0b5; line-height:1.8;">
-            💬 <strong style="color:#c8d6e5;">Ask anything in the chat</strong> —
-            scores, standings, injuries, fantasy advice, player comparisons.<br>
-            📋 <strong style="color:#c8d6e5;">Use the sidebar</strong> (☰ top-left)
-            for one-click team briefings, fantasy tools, and waiver wire.<br>
-            ⭐ <strong style="color:#c8d6e5;">Set a favourite team</strong> in
-            "My Profile" for a personalised daily update with one tap.
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-    _, btn_col, skip_col, _ = st.columns([2, 2, 1, 2])
-    with btn_col:
-        if st.button("✅ Got it — show me the app", use_container_width=True, type="primary"):
-            st.session_state["onboarding_done"] = True
-            st.rerun()
-    with skip_col:
-        if st.button("Skip", use_container_width=True):
-            st.session_state["onboarding_done"] = True
-            st.rerun()
 
 THINKING_MESSAGES = [
     "Checking the box score...",
@@ -358,10 +342,19 @@ def _typewriter(chunk_generator, delay: float = 0.005):  # ~1.5s added on a 300-
             yield piece
             time.sleep(delay)
 
-EXAMPLE_PROMPTS = [
-    "How did the Eagles do today?",
-    "Tell me about Josh Allen",
-    "What are Bills fantasy stats this week?",
+EXAMPLES = [
+    ("🗓️ Who's playing this week?",
+     {"intents": ["schedule"]}),
+    ("🏆 What's the playoff picture?",
+     {"intents": ["playoffs"]}),
+    ("🏥 Is Patrick Mahomes playing this week?",
+     {"intents": ["injury", "schedule"], "player": "Patrick Mahomes"}),
+    ("⚔️ Compare CeeDee Lamb and Ja'Marr Chase",
+     {"intents": ["comparison"], "player": "CeeDee Lamb", "player_b": "Ja'Marr Chase"}),
+    ("📈 Which team has the best defense?",
+     {"intents": ["team_stats"]}),
+    ("🌟 Who are the best rookies this season?",
+     {"intents": ["leaders"], "stat": "pts_ppr"}),
 ]
 
 # ------------------------------------------------------------------
@@ -400,8 +393,8 @@ def team_logo_url(name_or_abbr: str) -> str:
 with st.sidebar:
     st.markdown("### 🏈 Pro-Bot Tools")
 
-    # Voice input lives here now instead of the main chat area — keeps
-    # the chat surface focused purely on the conversation itself.
+    # Voice input lives here instead of the main chat area — keeps the chat
+    # surface focused purely on the conversation itself.
     voice_input = speech_to_text(
         language="en",
         start_prompt="🎙️ Tap to speak",
@@ -413,109 +406,50 @@ with st.sidebar:
     )
 
     if st.session_state["last_mentioned"]:
-        st.info(f"💬 Focused on **{st.session_state['last_mentioned'].title()}**")
+        st.caption(f"💬 Talking about **{st.session_state['last_mentioned'].title()}**")
 
     sidebar_prompt = None
     # Intent for each button, so the chatbot can skip Gemini intent extraction.
     sidebar_preset = None
 
-    # ------------------------------------------------------------
-    # My Profile — set once, remembered across restarts. Separate
-    # from the Quick Lookup dropdown below, which is for browsing
-    # *any* team on demand rather than personalizing to "my team".
-    # ------------------------------------------------------------
-    st.divider()
-    st.caption("MY PROFILE")
-
     profile = st.session_state["profile"]
     fav_team = profile.get("team")
     fav_player = profile.get("player")
 
-    if fav_team or fav_player:
-        if fav_team:
-            flog = team_logo_url(fav_team)
-            pcol, tcol = st.columns([1, 3])
-            with pcol:
-                if flog:
-                    # Task 5 — alt text for accessibility; html.escape guards
-                    # fav_team (user-controlled) injected into HTML attribute.
-                    _safe_team_name = html.escape(fav_team)
-                    st.markdown(
-                        f'<img src="{flog}" width="36" alt="{_safe_team_name} logo" style="display:block;">',
-                        unsafe_allow_html=True,
-                    )
-            with tcol:
-                st.markdown(f"**{fav_team}**")
-        if fav_player:
-            st.caption(f"⭐ {fav_player}")
+    def _grid(buttons) -> None:
+        """Two-column grid of (label, prompt, preset) buttons."""
+        global sidebar_prompt, sidebar_preset
+        for row in range(0, len(buttons), 2):
+            cols = st.columns(2)
+            for col, (label, prompt, preset) in zip(cols, buttons[row:row + 2]):
+                if col.button(label, use_container_width=True, key=f"sb_{label}"):
+                    sidebar_prompt, sidebar_preset = prompt, preset
 
-        if st.button("🔔 Get My Updates", use_container_width=True, type="primary"):
-            asks = []
-            if fav_team:
-                asks.append(
-                    f"For the {fav_team}: how they did in their last game, when "
-                    f"their next game is, the latest news, and where they stand "
-                    f"in the standings."
-                )
-            if fav_player:
-                asks.append(
-                    f"For {fav_player}: their latest stats, fantasy outlook, and "
-                    f"injury status."
-                )
-            asks.append("Also give me the biggest storylines around the league right now.")
-            sidebar_prompt = "Give me my personalized update. " + " ".join(asks)
-            sidebar_preset = {
-                "intents": (["last_game", "schedule", "news", "standings", "league_news"] if fav_team else ["league_news"])
-                           + (["player", "injury"] if fav_player else []),
-                "team": fav_team, "player": fav_player,
-            }
-
-        with st.expander("Edit profile"):
-            options = ["(none)"] + TEAM_NAMES
-            new_team = st.selectbox(
-                "Favorite team", options,
-                index=options.index(fav_team) if fav_team in options else 0,
-                key="profile_team_edit",
-            )
-            new_player = st.text_input("Favorite player", value=fav_player or "",
-                                        key="profile_player_edit")
-            if st.button("Save", key="save_profile_edit", use_container_width=True):
-                st.session_state["profile"] = {
-                    "team": None if new_team == "(none)" else new_team,
-                    "player": _sanitize_player(new_player) or None,
-                }
-                _save_prefs(st.session_state["profile"])
-                st.rerun()
-    else:
-        st.caption("Set a favorite team or player for one-click personalized updates.")
-        new_team = st.selectbox("Favorite team", ["(none)"] + TEAM_NAMES, key="profile_team_setup")
-        new_player = st.text_input("Favorite player (optional)", placeholder="e.g. Josh Allen",
-                                    key="profile_player_setup")
-        if st.button("Save Profile", use_container_width=True):
-            st.session_state["profile"] = {
-                "team": None if new_team == "(none)" else new_team,
-                "player": _sanitize_player(new_player) or None,
-            }
-            _save_prefs(st.session_state["profile"])
-            st.rerun()
-
+    # ------------------------------------------------------------
+    # Team lookup first — the most-used action. Defaults to the
+    # favorite team when one is set.
+    # ------------------------------------------------------------
     st.divider()
-    st.caption("QUICK LOOKUP")
-
-    team_choice = st.selectbox("Team", TEAM_NAMES, label_visibility="collapsed",
-                                placeholder="Choose a team")
+    st.caption("TEAM LOOKUP")
+    # A just-saved favorite becomes the lookup team. It must be applied
+    # before the selectbox is created: Streamlit keeps a keyed widget's
+    # value across reruns and ignores `index` after the first run.
+    if pending_team := st.session_state.pop("pending_team_choice", None):
+        st.session_state["team_choice"] = pending_team
+    team_choice = st.selectbox(
+        "Team", TEAM_NAMES, label_visibility="collapsed",
+        index=TEAM_NAMES.index(fav_team) if fav_team in TEAM_NAMES else 0,
+        key="team_choice",
+    )
     logo = team_logo_url(team_choice)
     if logo:
-        # Task 5 — alt text for accessibility; html.escape guards
-        # team_choice (from selectbox, but validate defensively).
+        # Alt text for accessibility; html.escape guards the HTML attribute.
         _safe_choice = html.escape(team_choice)
         st.markdown(
-            f'<img src="{logo}" width="64" alt="{_safe_choice} logo" style="display:block; margin-bottom:6px;">',
+            f'<img src="{logo}" width="56" alt="{_safe_choice} logo" style="display:block; margin-bottom:6px;">',
             unsafe_allow_html=True,
         )
 
-    # The one clear default action — everything else is one click away
-    # inside the expanders below, not competing for attention up front.
     if st.button("📋 Daily Briefing", use_container_width=True, type="primary"):
         sidebar_prompt = (
             f"Give me a quick daily briefing for the {team_choice}: how they did "
@@ -523,31 +457,39 @@ with st.sidebar:
             f"where they stand in the division. Also give me the biggest "
             f"storylines around the league right now."
         )
-        sidebar_preset = {"intents": ["last_game", "schedule", "news", "standings", "league_news"], "team": team_choice}
+        sidebar_preset = {"intents": ["last_game", "schedule", "news", "standings", "league_news"],
+                          "team": team_choice}
 
-    with st.expander(f"More for the {team_choice.split()[-1]}"):
-        c1, c2 = st.columns(2)
-        if c1.button("📊 Standings", use_container_width=True):
-            sidebar_prompt = f"How are the {team_choice} looking in the standings?"
-            sidebar_preset = {"intents": ["standings"], "team": team_choice}
-        if c2.button("📰 News", use_container_width=True):
-            sidebar_prompt = f"What's the latest news for the {team_choice}?"
-            sidebar_preset = {"intents": ["news"], "team": team_choice}
-        c3, c4 = st.columns(2)
-        if c3.button("⏭️ Next Game", use_container_width=True):
-            sidebar_prompt = f"When is the next game for the {team_choice}?"
-            sidebar_preset = {"intents": ["schedule"], "team": team_choice}
-        if c4.button("⏮️ Last Game", use_container_width=True):
-            sidebar_prompt = f"How did the {team_choice} do in their last game?"
-            sidebar_preset = {"intents": ["box_score"], "team": team_choice}
-        c5, c6 = st.columns(2)
-        if c5.button("🔴 Live Scores", use_container_width=True):
-            sidebar_prompt = "What are the latest scores from today's games?"
-            sidebar_preset = {"intents": ["scores"]}
-        if c6.button("🌎 League News", use_container_width=True):
-            sidebar_prompt = "What are the biggest storylines around the NFL right now?"
-            sidebar_preset = {"intents": ["league_news"]}
+    _nick = team_choice.split()[-1]
+    _grid([
+        ("🗓️ Schedule", f"What's the {team_choice} schedule?",
+         {"intents": ["schedule"], "team": team_choice}),
+        ("⏮️ Last Game", f"How did the {team_choice} do in their last game?",
+         {"intents": ["box_score"], "team": team_choice}),
+        ("📊 Standings", f"How are the {team_choice} looking in the standings?",
+         {"intents": ["standings"], "team": team_choice}),
+        ("📈 Team Stats", f"How do the {_nick} rank on offense and defense?",
+         {"intents": ["team_stats"], "team": team_choice}),
+        ("📰 News", f"What's the latest news for the {team_choice}?",
+         {"intents": ["news"], "team": team_choice}),
+        ("👥 Roster", f"What does the {team_choice} depth chart look like?",
+         {"intents": ["roster"], "team": team_choice}),
+    ])
 
+    st.divider()
+    st.caption("AROUND THE LEAGUE")
+    _grid([
+        ("🗓️ This Week", "What's on the NFL schedule this week?",
+         {"intents": ["schedule"]}),
+        ("🏆 Playoffs", "What does the playoff picture look like?",
+         {"intents": ["playoffs"]}),
+        ("🏅 Leaders", "Who are the top fantasy scorers this season?",
+         {"intents": ["leaders"], "stat": "pts_ppr"}),
+        ("🌎 Headlines", "What are the biggest storylines around the NFL right now?",
+         {"intents": ["league_news"]}),
+    ])
+
+    st.divider()
     with st.expander("🏆 Fantasy Tools"):
         st.caption("PLAYER LOOKUP")
         p_name = st.text_input("Player name", label_visibility="collapsed",
@@ -590,8 +532,74 @@ with st.sidebar:
             sidebar_preset = {"intents": ["waiver"],
                               "player": None if waiver_pos == "Any" else waiver_pos}
 
+    # ------------------------------------------------------------
+    # My Profile — optional personalization, so it sits below the
+    # tools and stays folded until used.
+    # ------------------------------------------------------------
+    if fav_team or fav_player:
+        st.divider()
+        st.caption("MY PROFILE")
+        if fav_team:
+            flog = team_logo_url(fav_team)
+            pcol, tcol = st.columns([1, 3])
+            with pcol:
+                if flog:
+                    _safe_team_name = html.escape(fav_team)
+                    st.markdown(
+                        f'<img src="{flog}" width="36" alt="{_safe_team_name} logo" style="display:block;">',
+                        unsafe_allow_html=True,
+                    )
+            with tcol:
+                st.markdown(f"**{fav_team}**")
+        if fav_player:
+            st.caption(f"⭐ {fav_player}")
+
+        if st.button("🔔 Get My Updates", use_container_width=True, type="primary"):
+            asks = []
+            if fav_team:
+                asks.append(
+                    f"For the {fav_team}: how they did in their last game, when "
+                    f"their next game is, the latest news, and where they stand "
+                    f"in the standings."
+                )
+            if fav_player:
+                asks.append(
+                    f"For {fav_player}: their latest stats, fantasy outlook, and "
+                    f"injury status."
+                )
+            asks.append("Also give me the biggest storylines around the league right now.")
+            sidebar_prompt = "Give me my personalized update. " + " ".join(asks)
+            sidebar_preset = {
+                "intents": (["last_game", "schedule", "news", "standings", "league_news"] if fav_team else ["league_news"])
+                           + (["player", "injury"] if fav_player else []),
+                "team": fav_team, "player": fav_player,
+            }
+        profile_label = "Edit profile"
+    else:
+        profile_label = "⭐ Set your favorite team"
+
+    with st.expander(profile_label):
+        st.caption("Pick a team and player for one-tap personalized updates.")
+        options = ["(none)"] + TEAM_NAMES
+        new_team = st.selectbox(
+            "Favorite team", options,
+            index=options.index(fav_team) if fav_team in options else 0,
+            key="profile_team",
+        )
+        new_player = st.text_input("Favorite player (optional)", value=fav_player or "",
+                                    placeholder="e.g. Josh Allen", key="profile_player")
+        if st.button("Save Profile", use_container_width=True):
+            st.session_state["profile"] = {
+                "team": None if new_team == "(none)" else new_team,
+                "player": _sanitize_player(new_player) or None,
+            }
+            _save_prefs(st.session_state["profile"])
+            if new_team != "(none)":
+                st.session_state["pending_team_choice"] = new_team
+            st.rerun()
+
     st.divider()
-    # Task 9 — Export Chat button
+    ec1, ec2 = st.columns(2)
     _has_msgs = len(st.session_state.messages) > 0
     if _has_msgs:
         _export_lines = []
@@ -600,21 +608,21 @@ with st.sidebar:
             _ts   = _m.get("time", "")
             _prefix = f"[{_ts}] {_role}:" if _ts else f"{_role}:"
             _export_lines.append(f"{_prefix}\n{_m['content']}\n")
-        _export_str = "\n".join(_export_lines)
-        _export_name = f"nfl-probot-chat-{datetime.date.today()}.txt"
-        st.download_button(
-            label="📥 Export Chat",
-            data=_export_str,
-            file_name=_export_name,
+        ec1.download_button(
+            label="📥 Export",
+            data="\n".join(_export_lines),
+            file_name=f"nfl-probot-chat-{datetime.date.today()}.txt",
             mime="text/plain",
             use_container_width=True,
         )
     else:
-        st.button("📥 Export Chat", disabled=True, use_container_width=True,
-                  help="Nothing to export yet — start a conversation first.")
-    if st.button("🗑️ Clear Conversation", use_container_width=True):
+        ec1.button("📥 Export", disabled=True, use_container_width=True,
+                   help="Nothing to export yet — start a conversation first.")
+    if ec2.button("🗑️ Clear", use_container_width=True, disabled=not _has_msgs,
+                  help="Start a new conversation"):
         st.session_state.messages = []
         st.session_state["last_mentioned"] = None
+        st.session_state["pending_selection"] = None
         st.rerun()
 
 # ------------------------------------------------------------------
@@ -624,33 +632,36 @@ st.markdown("""
 <div class="hero">
     <div class="badge">🏈</div>
     <div>
-        <h1>NFL AI Assistant</h1>
-        <p>Live scores, news, standings, and fantasy stats — just ask.</p>
-        <p style="font-size:11.5px; color:#5c6b7e; margin-top:3px;">
+        <h1>NFL Pro-Bot</h1>
+        <p>Scores, schedules, standings, box scores, injuries and fantasy advice — just ask.</p>
+        <p class="hero-note">
             ⚠️ AI-generated — verify before acting. Not for betting.
-            Data: ESPN · Sleeper · RSS feeds.
+            Data: ESPN · Sleeper · news feeds.
         </p>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
 # ------------------------------------------------------------------
-# Empty State (first visit) — clickable example prompts
+# Empty State (first visit) — example questions
 # ------------------------------------------------------------------
-example_prompt = None
-if not st.session_state.messages:
-    st.markdown("""
-    <div class="empty-state">
-        <div>Ask about scores, standings, news, schedules, or fantasy stats.</div>
-    </div>
-    """, unsafe_allow_html=True)
+# chat_input always renders pinned to the bottom; reading it here lets the
+# examples hide on the run that answers a typed first question.
+user_input = st.chat_input("Ask anything — e.g. \"How's the Bills defense?\" or \"Who's on bye?\"")
 
-    st.markdown('<div class="chip-row">', unsafe_allow_html=True)
-    cols = st.columns(len(EXAMPLE_PROMPTS))
-    for i, prompt in enumerate(EXAMPLE_PROMPTS):
-        if cols[i].button(prompt, key=f"ex_{i}", use_container_width=True):
-            example_prompt = prompt
-    st.markdown('</div>', unsafe_allow_html=True)
+_question_pending = bool(user_input or sidebar_prompt or voice_input
+                         or st.session_state.get("queued_query"))
+if not st.session_state.messages and not _question_pending:
+    st.markdown('<div class="empty-state">Try one of these, or type your own question below 👇</div>',
+                unsafe_allow_html=True)
+    for row in range(0, len(EXAMPLES), 3):
+        cols = st.columns(3)
+        for col, (label, preset) in zip(cols, EXAMPLES[row:row + 3]):
+            if col.button(label, key=f"ex_{label}", use_container_width=True):
+                # Strip the emoji: the label doubles as the question text.
+                st.session_state["queued_query"] = label.split(" ", 1)[1]
+                st.session_state["queued_preset"] = preset
+                st.rerun()
 
 # ------------------------------------------------------------------
 # Chat History
@@ -683,11 +694,9 @@ for message in st.session_state.messages:
 # ------------------------------------------------------------------
 # Input Handling — text (voice input lives in the sidebar now)
 # ------------------------------------------------------------------
-user_input = st.chat_input("Ex: 'How did the Giants do today?' or 'Tell me about Josh Allen'")
-
 queued_query = st.session_state.pop("queued_query", None)
 queued_preset = st.session_state.pop("queued_preset", None)
-final_query = queued_query or sidebar_prompt or example_prompt or voice_input or user_input
+final_query = queued_query or sidebar_prompt or voice_input or user_input
 final_preset = queued_preset if queued_query else (sidebar_preset if sidebar_prompt else None)
 
 
@@ -749,13 +758,12 @@ if final_query:
         st.markdown(f'<div class="msg-time">{now}</div>', unsafe_allow_html=True)
 
     with st.chat_message("assistant", avatar="🏈"):
-        with st.status(random.choice(THINKING_MESSAGES), expanded=False) as status:
+        with st.spinner(random.choice(THINKING_MESSAGES)):
             # Intent extraction + data fetching happen here (blocking).
-            # For normal replies this returns a *generator* — actual Gemini
-            # formatting/streaming is lazy and hasn't started yet, so this
-            # status only covers "gathering data", not "writing the answer".
+            # For normal replies this returns a *generator* — Gemini's
+            # streaming is lazy, so the spinner covers "gathering data" and
+            # disappears as the answer starts typing out.
             response = nfl_chatbot_with_context(final_query, preset=final_preset)
-            status.update(label="Done", state="complete")
 
         reply_time = datetime.datetime.now().strftime("%I:%M %p")
 
@@ -846,7 +854,7 @@ _priv_url = f"{_repo}/blob/main/PRIVACY_POLICY.md"   if _repo else "#"
 st.markdown("---")
 st.markdown(
     f"""
-<div style="text-align:center; font-size:12px; color:#4a5568; padding:8px 0 16px 0; line-height:2;">
+<div style="text-align:center; font-size:12px; color:#8492a6; padding:8px 0 16px 0; line-height:2;">
     NFL Pro-Bot is an independent fan tool — not affiliated with the NFL, ESPN, or Sleeper.<br>
     Responses are AI-generated and may be inaccurate. Not for use in sports betting.<br>
     Data sourced from <strong>ESPN</strong> · <strong>Sleeper</strong> · <strong>Yahoo Sports</strong> · <strong>NBC Sports PFT</strong><br>
@@ -854,7 +862,7 @@ st.markdown(
     &nbsp;·&nbsp;
     <a href="{_priv_url}" target="_blank" style="color:#4f8ff0; text-decoration:none;">Privacy Policy</a>
     &nbsp;·&nbsp;
-    <span style="color:#4a5568;">© 2026 NFL Pro-Bot</span>
+    <span style="color:#8492a6;">© 2026 NFL Pro-Bot</span>
 </div>
 """,
     unsafe_allow_html=True,
