@@ -43,6 +43,11 @@ jobs:
       - name: Run secrets scan
         # `scan --baseline` only rewrites the baseline and always exits 0;
         # the hook exits non-zero when a secret is not in the baseline.
+        # UTF-8 mode: without it (e.g. on Windows) files with emoji such as
+        # README.md are silently skipped. Run it the same way locally:
+        #   git ls-files -z | PYTHONUTF8=1 xargs -0 detect-secrets-hook --baseline .secrets.baseline
+        env:
+          PYTHONUTF8: "1"
         run: git ls-files -z | xargs -0 detect-secrets-hook --baseline .secrets.baseline
 
   dependency-audit:
