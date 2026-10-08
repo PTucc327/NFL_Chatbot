@@ -416,6 +416,8 @@ with st.sidebar:
         st.info(f"💬 Focused on **{st.session_state['last_mentioned'].title()}**")
 
     sidebar_prompt = None
+    # Intent for each button, so the chatbot can skip Gemini intent extraction.
+    sidebar_preset = None
 
     # ------------------------------------------------------------
     # My Profile — set once, remembered across restarts. Separate
@@ -462,6 +464,11 @@ with st.sidebar:
                 )
             asks.append("Also give me the biggest storylines around the league right now.")
             sidebar_prompt = "Give me my personalized update. " + " ".join(asks)
+            sidebar_preset = {
+                "intents": (["last_game", "schedule", "news", "standings", "league_news"] if fav_team else ["league_news"])
+                           + (["player", "injury"] if fav_player else []),
+                "team": fav_team, "player": fav_player,
+            }
 
         with st.expander("Edit profile"):
             options = ["(none)"] + TEAM_NAMES
@@ -516,33 +523,43 @@ with st.sidebar:
             f"where they stand in the division. Also give me the biggest "
             f"storylines around the league right now."
         )
+        sidebar_preset = {"intents": ["last_game", "schedule", "news", "standings", "league_news"], "team": team_choice}
 
     with st.expander(f"More for the {team_choice.split()[-1]}"):
         c1, c2 = st.columns(2)
         if c1.button("📊 Standings", use_container_width=True):
             sidebar_prompt = f"How are the {team_choice} looking in the standings?"
+            sidebar_preset = {"intents": ["standings"], "team": team_choice}
         if c2.button("📰 News", use_container_width=True):
             sidebar_prompt = f"What's the latest news for the {team_choice}?"
+            sidebar_preset = {"intents": ["news"], "team": team_choice}
         c3, c4 = st.columns(2)
         if c3.button("⏭️ Next Game", use_container_width=True):
             sidebar_prompt = f"When is the next game for the {team_choice}?"
+            sidebar_preset = {"intents": ["schedule"], "team": team_choice}
         if c4.button("⏮️ Last Game", use_container_width=True):
             sidebar_prompt = f"How did the {team_choice} do in their last game?"
+            sidebar_preset = {"intents": ["last_game"], "team": team_choice}
         c5, c6 = st.columns(2)
         if c5.button("🔴 Live Scores", use_container_width=True):
             sidebar_prompt = "What are the latest scores from today's games?"
+            sidebar_preset = {"intents": ["scores"]}
         if c6.button("🌎 League News", use_container_width=True):
             sidebar_prompt = "What are the biggest storylines around the NFL right now?"
+            sidebar_preset = {"intents": ["league_news"]}
 
     with st.expander("🏆 Fantasy Tools"):
         st.caption("PLAYER LOOKUP")
         p_name = st.text_input("Player name", label_visibility="collapsed",
                                 placeholder="Player name, e.g. CeeDee Lamb")
         fc1, fc2 = st.columns(2)
-        if fc1.button("💰 Fantasy", use_container_width=True) and p_name:
-            sidebar_prompt = f"Can you give me a fantasy breakdown for {_sanitize_player(p_name)}?" if _sanitize_player(p_name) else None
-        if fc2.button("🏥 Injury", use_container_width=True) and p_name:
-            sidebar_prompt = f"What is the injury status for {_sanitize_player(p_name)}?" if _sanitize_player(p_name) else None
+        _sp = _sanitize_player(p_name or "")
+        if fc1.button("💰 Fantasy", use_container_width=True) and _sp:
+            sidebar_prompt = f"Can you give me a fantasy breakdown for {_sp}?"
+            sidebar_preset = {"intents": ["fantasy"], "player": _sp}
+        if fc2.button("🏥 Injury", use_container_width=True) and _sp:
+            sidebar_prompt = f"What is the injury status for {_sp}?"
+            sidebar_preset = {"intents": ["injury"], "player": _sp}
 
         st.caption("COMPARE & TRADE")
         p1 = st.text_input("Player 1", label_visibility="collapsed",
@@ -554,10 +571,12 @@ with st.sidebar:
             _sp1, _sp2 = _sanitize_player(p1), _sanitize_player(p2)
             if _sp1 and _sp2:
                 sidebar_prompt = f"Compare {_sp1} vs {_sp2}"
+                sidebar_preset = {"intents": ["comparison"], "player": _sp1, "player_b": _sp2}
         if cc2.button("🔄 Trade", use_container_width=True) and p1 and p2:
             _sp1, _sp2 = _sanitize_player(p1), _sanitize_player(p2)
             if _sp1 and _sp2:
                 sidebar_prompt = f"Should I trade {_sp1} for {_sp2}?"
+                sidebar_preset = {"intents": ["trade"], "player": _sp1, "player_b": _sp2}
 
         st.caption("WAIVER WIRE")
         waiver_pos = st.selectbox("Position", ["Any", "QB", "RB", "WR", "TE"],
@@ -568,6 +587,8 @@ with st.sidebar:
                 if waiver_pos == "Any"
                 else f"Who are the best {waiver_pos} waiver wire pickups right now?"
             )
+            sidebar_preset = {"intents": ["waiver"],
+                              "player": None if waiver_pos == "Any" else waiver_pos}
 
     st.divider()
     # Task 9 — Export Chat button
@@ -647,7 +668,9 @@ for message in st.session_state.messages:
 user_input = st.chat_input("Ex: 'How did the Giants do today?' or 'Tell me about Josh Allen'")
 
 queued_query = st.session_state.pop("queued_query", None)
+queued_preset = st.session_state.pop("queued_preset", None)
 final_query = queued_query or sidebar_prompt or example_prompt or voice_input or user_input
+final_preset = queued_preset if queued_query else (sidebar_preset if sidebar_prompt else None)
 
 
 def _render_pending_selection() -> None:
@@ -682,6 +705,9 @@ def _render_pending_selection() -> None:
                 st.session_state["last_mentioned"] = p.get("full_name")
                 where = f"{p.get('position', '')} for the {team_label}" if meta else "free agent"
                 st.session_state["queued_query"] = f"Tell me about {p.get('full_name')} ({where})"
+                st.session_state["queued_preset"] = {
+                    "intents": ["player"], "player": p.get("full_name"), "team": p.get("team"),
+                }
                 st.rerun()
 
 
@@ -710,7 +736,7 @@ if final_query:
             # For normal replies this returns a *generator* — actual Gemini
             # formatting/streaming is lazy and hasn't started yet, so this
             # status only covers "gathering data", not "writing the answer".
-            response = nfl_chatbot_with_context(final_query)
+            response = nfl_chatbot_with_context(final_query, preset=final_preset)
             status.update(label="Done", state="complete")
 
         reply_time = datetime.datetime.now().strftime("%I:%M %p")

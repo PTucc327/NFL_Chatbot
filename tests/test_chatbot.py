@@ -557,3 +557,65 @@ class TestModelChain:
         with caplog.at_level("WARNING"):
             chatbot._call_gemini("sys", "q")
         assert "GenerateRequestsPerDayPerProjectPerModel-FreeTier=20" in caplog.text
+
+
+# ─── Presets (sidebar buttons) and the shared answer cache ────────
+
+@pytest.fixture
+def preset_env(fresh_budget):
+    chatbot._answer_cache.clear()
+    chatbot.st.session_state = {}
+    yield
+    chatbot._answer_cache.clear()
+
+
+class TestPresets:
+    PRESET = {"intents": ["standings"], "team": "Buffalo Bills"}
+
+    def _ask(self, stream_chunks):
+        with mock.patch.object(chatbot, "_call_gemini") as mock_extract, \
+             mock.patch.object(chatbot, "_stream_gemini",
+                               return_value=iter(stream_chunks)) as mock_stream:
+            resp = chatbot.nfl_chatbot_with_context("Bills standings?", preset=self.PRESET)
+            text = "".join(resp.stream)
+        return text, mock_extract, mock_stream
+
+    def test_preset_skips_intent_extraction(self, preset_env):
+        text, mock_extract, _ = self._ask(["Bills are 3-1."])
+        mock_extract.assert_not_called()
+        assert text == "Bills are 3-1."
+
+    def test_second_identical_preset_is_served_from_cache(self, preset_env):
+        self._ask(["Bills are 3-1."])
+        text, _, mock_stream = self._ask(["should not be used"])
+        mock_stream.assert_not_called()
+        assert text == "Bills are 3-1."
+
+    def test_cached_answer_expires(self, preset_env):
+        self._ask(["Bills are 3-1."])
+        for k, (at, t, c) in list(chatbot._answer_cache.items()):
+            chatbot._answer_cache[k] = (at - chatbot._ANSWER_CACHE_TTL - 1, t, c)
+        text, _, mock_stream = self._ask(["Bills are 4-1."])
+        mock_stream.assert_called_once()
+        assert text == "Bills are 4-1."
+
+    def test_raw_data_fallback_is_not_cached(self, preset_env):
+        self._ask([chatbot.QUOTA_ERROR])
+        assert chatbot._answer_cache == {}
+
+    def test_cut_off_answer_is_not_cached(self, preset_env):
+        self._ask(["The Bills", chatbot.API_ERROR])
+        assert chatbot._answer_cache == {}
+
+    def test_typed_questions_are_never_cached(self, preset_env):
+        with mock.patch.object(chatbot, "_call_gemini",
+                               return_value='{"intents":["standings"],"team":"Buffalo Bills"}'), \
+             mock.patch.object(chatbot, "_stream_gemini", return_value=iter(["ok"])):
+            "".join(chatbot.nfl_chatbot_with_context("Bills standings?").stream)
+        assert chatbot._answer_cache == {}
+
+    def test_position_preset_is_not_remembered_as_player(self, preset_env):
+        with mock.patch.object(chatbot, "_stream_gemini", return_value=iter(["ok"])):
+            chatbot.nfl_chatbot_with_context(
+                "WR waivers?", preset={"intents": ["waiver"], "player": "WR"})
+        assert "last_player" not in chatbot.st.session_state

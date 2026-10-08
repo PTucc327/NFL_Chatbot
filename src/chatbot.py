@@ -212,6 +212,8 @@ QUOTA_ERROR = "__QUOTA_ERROR__"
 API_ERROR = "__API_ERROR__"
 CONFIG_ERROR = "__CONFIG_ERROR__"
 _ERROR_SENTINELS = (QUOTA_ERROR, API_ERROR, CONFIG_ERROR)
+FALLBACK_NOTICE = "_The AI assistant is busy, so here's the raw data I found:_\n\n"
+CUT_OFF_NOTICE = "\n\n_(The response was cut off — please try again.)_"
 
 BUSY_MESSAGE = (
     "⚠️ NFL Pro-Bot is getting more questions than it can answer right now. "
@@ -732,11 +734,10 @@ def stream_response(user_input: str, data_results: Dict[str, Any],
     for chunk in _stream_gemini(_FORMATTING_SYSTEM, prompt):
         if chunk in _ERROR_SENTINELS:
             if not first:
-                yield "\n\n_(The response was cut off — please try again.)_"
+                yield CUT_OFF_NOTICE
             elif chunk != CONFIG_ERROR and (raw := _raw_data_fallback(non_disambig)):
                 # The data is already fetched; show it rather than an error.
-                yield ("_The AI assistant is busy, so here's the raw data "
-                       "I found:_\n\n" + raw)
+                yield FALLBACK_NOTICE + raw
             else:
                 yield chunk  # app.py renders the matching error message
             return
@@ -806,18 +807,80 @@ def _update_conv_state(parsed: Dict[str, Any],
 
 
 # -------------------------------------------------------
+# Preset answers cache
+# -------------------------------------------------------
+# Sidebar buttons ask the same questions for everyone ("Daily briefing for
+# the Eagles"), so a recent Gemini answer can be reused instead of spending
+# free-tier quota again. Only clean answers are cached — never raw-data
+# fallbacks or cut-off replies.
+_ANSWER_CACHE_TTL = 5 * 60
+_ANSWER_CACHE_MAX = 200
+_answer_cache: Dict[str, tuple] = {}   # key -> (stored_at, text, chart_data)
+_answer_cache_lock = threading.Lock()
+
+
+def _answer_cache_get(key: str) -> Optional[tuple]:
+    with _answer_cache_lock:
+        hit = _answer_cache.get(key)
+    if hit and time.time() - hit[0] < _ANSWER_CACHE_TTL:
+        return hit
+    return None
+
+
+def _cache_answer(stream: Generator, key: str,
+                  chart_data: Optional[Dict[str, Any]]) -> Generator[str, None, None]:
+    """Passes the stream through and caches the full text once it completes cleanly."""
+    parts = []
+    for chunk in stream:
+        parts.append(chunk)
+        yield chunk
+    text = "".join(parts)
+    if (not text or text in _ERROR_SENTINELS or text.startswith(FALLBACK_NOTICE)
+            or CUT_OFF_NOTICE in text):
+        return
+    now = time.time()
+    with _answer_cache_lock:
+        for k in [k for k, v in _answer_cache.items() if now - v[0] >= _ANSWER_CACHE_TTL]:
+            del _answer_cache[k]
+        if len(_answer_cache) >= _ANSWER_CACHE_MAX:
+            del _answer_cache[min(_answer_cache, key=lambda k: _answer_cache[k][0])]
+        _answer_cache[key] = (now, text, chart_data)
+
+
+# -------------------------------------------------------
 # Main Entry Point
 # -------------------------------------------------------
 
-def nfl_chatbot_with_context(user_input: str) -> Union[str, Dict[str, Any], ChatbotResponse]:
+def _remember(parsed: Dict[str, Any]) -> None:
+    """Session memory used to resolve follow-ups ("how about them?")."""
+    new_player = parsed.get("player")
+    if new_player and new_player.upper() in VALID_POSITIONS:
+        new_player = None  # a position filter, not a player
+    new_team = parsed.get("team")
+    if new_player:
+        st.session_state["last_player"]   = new_player
+        st.session_state["last_mentioned"] = new_player
+    if new_team:
+        st.session_state["last_team"] = new_team
+        if not new_player:
+            st.session_state["last_mentioned"] = new_team
+
+
+def nfl_chatbot_with_context(
+    user_input: str, preset: Optional[Dict[str, Any]] = None,
+) -> Union[str, Dict[str, Any], ChatbotResponse]:
     """
     Full pipeline:
-      1. Extract intent + entities via Gemini (blocking)
+      1. Extract intent + entities via Gemini (blocking) — skipped when the
+         caller passes a `preset` (sidebar buttons already know the intent)
       2. Fetch all data concurrently
       3. Check for disambiguation → return dict for app.py
       4. Update conversation state
       5. Return ChatbotResponse(stream, chart_data) for app.py → st.write_stream()
       6. Update session memory
+
+    `preset` holds any of intents/team/player/player_b/season. Preset answers
+    are cached for a few minutes and shared across sessions.
     """
     context = {
         "last_player": st.session_state.get("last_player"),
@@ -827,21 +890,36 @@ def nfl_chatbot_with_context(user_input: str) -> Union[str, Dict[str, Any], Chat
     conversation_history = st.session_state.get("messages", [])
 
     # Step 0 — rate limit check, before any Gemini call is made
-    limit_msg = _check_rate_limit() or _check_global_budget()
+    limit_msg = _check_rate_limit()
+    if limit_msg:
+        return limit_msg
+
+    cache_key = json.dumps([user_input, preset], sort_keys=True) if preset else None
+    if cache_key and (hit := _answer_cache_get(cache_key)):
+        logger.info("preset answer served from cache intents=%s", preset.get("intents"))
+        _remember(preset)
+        return ChatbotResponse(stream=iter([hit[1]]), chart_data=hit[2])
+
+    limit_msg = _check_global_budget()
     if limit_msg:
         return limit_msg
 
     # Step 1 — understand
-    parsed = _extract_intent(user_input, context)
-    if parsed.get("__error") == QUOTA_ERROR:
-        # Without intents there's no data to fall back on, and formatting
-        # would hit the same quota — answer now instead of spending a call.
-        return BUSY_MESSAGE
+    if preset:
+        parsed = {"intents": [], "team": None, "player": None, "player_b": None,
+                  "season": None, **preset, "raw_query": user_input}
+    else:
+        parsed = _extract_intent(user_input, context)
+        if parsed.get("__error") == QUOTA_ERROR:
+            # Without intents there's no data to fall back on, and formatting
+            # would hit the same quota — answer now instead of spending a call.
+            return BUSY_MESSAGE
     # Log structured intent metadata only — raw_query is omitted to avoid
     # persisting user message content in cloud log aggregators, which would
     # contradict the privacy policy ("no personal data collected").
     logger.info(
-        "intent_extraction intents=%s team=%s player=%s player_b=%s season=%s",
+        "intent_extraction source=%s intents=%s team=%s player=%s player_b=%s season=%s",
+        "preset" if preset else "gemini",
         parsed.get("intents"),
         parsed.get("team"),
         parsed.get("player"),
@@ -865,16 +943,10 @@ def nfl_chatbot_with_context(user_input: str) -> Union[str, Dict[str, Any], Chat
     generator = stream_response(
         user_input, data_results, conversation_history, new_conv_state
     )
+    if cache_key:
+        generator = _cache_answer(generator, cache_key, chart_data)
 
     # Step 6 — memory
-    new_player = parsed.get("player")
-    new_team   = parsed.get("team")
-    if new_player:
-        st.session_state["last_player"]   = new_player
-        st.session_state["last_mentioned"] = new_player
-    if new_team:
-        st.session_state["last_team"] = new_team
-        if not new_player:
-            st.session_state["last_mentioned"] = new_team
+    _remember(parsed)
 
     return ChatbotResponse(stream=generator, chart_data=chart_data)
