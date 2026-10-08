@@ -368,9 +368,11 @@ class _FakeQuotaError(Exception):
 
 @pytest.fixture
 def fresh_budget():
-    chatbot._budget.update(minute=[], day=None, day_count=0, cooldown_until=0.0)
+    chatbot._budget.update(minute=[], day=None, day_count=0)
+    chatbot._model_cooldown.clear()
     yield
-    chatbot._budget.update(minute=[], day=None, day_count=0, cooldown_until=0.0)
+    chatbot._budget.update(minute=[], day=None, day_count=0)
+    chatbot._model_cooldown.clear()
 
 
 class TestGlobalBudget:
@@ -387,13 +389,15 @@ class TestGlobalBudget:
                 assert chatbot._check_global_budget() is None
             assert chatbot._check_global_budget() == chatbot.DAILY_LIMIT_MESSAGE
 
-    def test_429_sets_cooldown(self, fresh_budget):
-        assert chatbot._gemini_error(_FakeQuotaError()) == chatbot.QUOTA_ERROR
+    def test_all_models_cooling_down_is_busy(self, fresh_budget):
+        for m in chatbot.GEMINI_MODELS:
+            chatbot._model_cooldown[m] = chatbot.time.time() + 30
         assert chatbot._check_global_budget() == chatbot.BUSY_MESSAGE
 
-    def test_other_errors_are_api_errors(self, fresh_budget):
-        assert chatbot._gemini_error(RuntimeError("boom")) == chatbot.API_ERROR
-        assert chatbot._check_global_budget() is None
+    def test_all_models_out_for_the_day(self, fresh_budget):
+        for m in chatbot.GEMINI_MODELS:
+            chatbot._model_cooldown[m] = chatbot.time.time() + 3 * 60 * 60
+        assert chatbot._check_global_budget() == chatbot.DAILY_LIMIT_MESSAGE
 
 
 class TestQuotaFallback:
@@ -428,21 +432,6 @@ class TestQuotaFallback:
         mock_dispatch.assert_not_called()
 
 
-class TestQuotaCooldown:
-    def test_daily_quota_backs_off_longer(self, fresh_budget):
-        class DailyQuota(_FakeQuotaError):
-            details = {"error": {"details": [{"violations": [
-                {"quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier"}]}]}}
-        before = chatbot.time.time()
-        chatbot._gemini_error(DailyQuota())
-        assert chatbot._budget["cooldown_until"] - before >= chatbot._DAILY_QUOTA_COOLDOWN_SECONDS - 1
-
-    def test_per_minute_quota_backs_off_briefly(self, fresh_budget):
-        before = chatbot.time.time()
-        chatbot._gemini_error(_FakeQuotaError())
-        assert chatbot._budget["cooldown_until"] - before <= chatbot._QUOTA_COOLDOWN_SECONDS + 1
-
-
 class TestDispatchTimeout:
     def test_slow_intent_does_not_block_reply(self):
         import threading
@@ -463,3 +452,108 @@ class TestDispatchTimeout:
         assert elapsed < 2
         assert results["scores"] == "Bills 24 @ Patriots 17"
         assert "took too long" in results["standings"]
+
+
+# ─── Free-tier model chain ────────────────────────────────────────
+
+class _ApiErr(Exception):
+    def __init__(self, code, details=None):
+        super().__init__(f"{code}")
+        self.code, self.details = code, details or {}
+
+
+def _quota(quota_id, retry=None):
+    details = [{"violations": [{"quotaId": quota_id, "quotaValue": "20"}]}]
+    if retry:
+        details.append({"retryDelay": retry})
+    return _ApiErr(429, {"error": {"details": details}})
+
+
+class _FakeModels:
+    """behavior: model -> Exception to raise, or text to return/stream."""
+    def __init__(self, behavior):
+        self.behavior, self.calls = behavior, []
+
+    def _run(self, model):
+        self.calls.append(model)
+        b = self.behavior[model]
+        if isinstance(b, Exception):
+            raise b
+        return b
+
+    def generate_content(self, model, **_):
+        return mock.Mock(text=self._run(model))
+
+    def generate_content_stream(self, model, **_):
+        b = self._run(model)
+        if isinstance(b, list):  # [chunk, ..., Exception] = fails mid-stream
+            def gen():
+                for part in b:
+                    if isinstance(part, Exception):
+                        raise part
+                    yield mock.Mock(text=part)
+            return gen()
+        return iter([mock.Mock(text=b)])
+
+
+@pytest.fixture
+def chain(fresh_budget):
+    """Three-model chain with a fake client; yields a setter for behaviors."""
+    models = ["m-lite", "m-flash", "m-last"]
+    fake = mock.Mock()
+    with mock.patch.object(chatbot, "GEMINI_MODELS", models), \
+         mock.patch.object(chatbot, "_get_gemini_client", return_value=fake):
+        def setup(behavior):
+            fake.models = _FakeModels(behavior)
+            return fake.models
+        yield setup
+
+
+class TestModelChain:
+    def test_daily_quota_falls_through_and_pauses_until_midnight(self, chain):
+        fm = chain({"m-lite": _quota("GenerateRequestsPerDayPerProjectPerModel-FreeTier"),
+                    "m-flash": '{"ok": 1}', "m-last": "unused"})
+        assert chatbot._call_gemini("sys", "q") == '{"ok": 1}'
+        assert fm.calls == ["m-lite", "m-flash"]
+        assert chatbot._model_cooldown["m-lite"] - chatbot.time.time() > 60
+        assert chatbot._available_models() == ["m-flash", "m-last"]
+
+    def test_per_minute_quota_uses_retry_delay(self, chain):
+        chain({"m-lite": _quota("GenerateRequestsPerMinutePerProjectPerModel-FreeTier", "7s"),
+               "m-flash": "ok", "m-last": "unused"})
+        chatbot._call_gemini("sys", "q")
+        wait = chatbot._model_cooldown["m-lite"] - chatbot.time.time()
+        assert 5 < wait <= 8.5
+
+    def test_retired_model_is_skipped(self, chain):
+        fm = chain({"m-lite": _ApiErr(404), "m-flash": "ok", "m-last": "unused"})
+        assert chatbot._call_gemini("sys", "q") == "ok"
+        chatbot._call_gemini("sys", "q")
+        assert fm.calls == ["m-lite", "m-flash", "m-flash"]
+
+    def test_bad_request_does_not_burn_other_models(self, chain):
+        fm = chain({"m-lite": _ApiErr(400), "m-flash": "ok", "m-last": "ok"})
+        assert chatbot._call_gemini("sys", "q") == chatbot.API_ERROR
+        assert fm.calls == ["m-lite"]
+
+    def test_every_model_exhausted_returns_quota_error(self, chain):
+        q = _quota("GenerateRequestsPerDayPerProjectPerModel-FreeTier")
+        chain({"m-lite": q, "m-flash": q, "m-last": q})
+        assert chatbot._call_gemini("sys", "q") == chatbot.QUOTA_ERROR
+        assert chatbot._check_global_budget() == chatbot.DAILY_LIMIT_MESSAGE
+
+    def test_stream_falls_through_before_first_token(self, chain):
+        chain({"m-lite": _ApiErr(503), "m-flash": "streamed answer", "m-last": "unused"})
+        assert list(chatbot._stream_gemini("sys", "q")) == ["streamed answer"]
+
+    def test_stream_failure_mid_answer_is_not_retried(self, chain):
+        fm = chain({"m-lite": ["Partial ", _ApiErr(503)], "m-flash": "x", "m-last": "x"})
+        assert list(chatbot._stream_gemini("sys", "q")) == ["Partial ", chatbot.API_ERROR]
+        assert fm.calls == ["m-lite"]
+
+    def test_logs_quota_limit_value(self, chain, caplog):
+        chain({"m-lite": _quota("GenerateRequestsPerDayPerProjectPerModel-FreeTier"),
+               "m-flash": "ok", "m-last": "ok"})
+        with caplog.at_level("WARNING"):
+            chatbot._call_gemini("sys", "q")
+        assert "GenerateRequestsPerDayPerProjectPerModel-FreeTier=20" in caplog.text

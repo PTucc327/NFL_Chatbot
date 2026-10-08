@@ -14,6 +14,7 @@ Features:
 Uses the google.genai SDK (v2+).
 """
 
+import datetime
 import json
 import logging
 import os
@@ -52,7 +53,19 @@ from src.api_client import (
 
 logger = logging.getLogger(__name__)
 
-GEMINI_MODEL = "gemini-2.5-flash"
+# Free-tier models, tried in order. Each model has its own free quota
+# (per Google Cloud project), so falling through the chain adds their daily
+# capacity together. Override with GEMINI_MODELS="model-a,model-b".
+_DEFAULT_GEMINI_MODELS = (
+    "gemini-3.5-flash-lite",
+    "gemini-3.5-flash",
+    "gemini-2.5-flash",
+    "gemini-3.1-flash-lite",   # slowest in testing (~16s); last resort
+)
+GEMINI_MODELS = [
+    m.strip() for m in os.getenv("GEMINI_MODELS", ",".join(_DEFAULT_GEMINI_MODELS)).split(",")
+    if m.strip()
+]
 
 # Position strings that the extraction prompt places in the "player" slot
 # for roster/waiver queries filtered by position.
@@ -175,20 +188,25 @@ def _check_rate_limit() -> Optional[str]:
 
 
 # -------------------------------------------------------
-# App-wide Gemini budget (shared by every session in this process)
+# App-wide Gemini budget + free-tier model chain
 # -------------------------------------------------------
 # The per-session limiter above resets on page refresh and can't see other
-# users, but every session spends the same API key. These caps protect the
-# key's quota (and bill) as a whole. Module globals are process-wide in
-# Streamlit, which is one process per deployed app. Override via env vars;
-# 0 disables a cap.
-_GLOBAL_MAX_PER_MINUTE = int(os.getenv("GEMINI_MAX_MSGS_PER_MIN", "5"))
-_GLOBAL_MAX_PER_DAY    = int(os.getenv("GEMINI_MAX_MSGS_PER_DAY", "200"))
-_QUOTA_COOLDOWN_SECONDS = 60
-_DAILY_QUOTA_COOLDOWN_SECONDS = 15 * 60
+# users, but every session spends the same API key. Module globals are
+# process-wide in Streamlit (one process per deployed app).
+#
+# On the free tier the real ceiling is Google's per-model quota, so each
+# model in GEMINI_MODELS gets its own cooldown when it reports a 429 (until
+# midnight Pacific for a daily quota) and requests fall through to the next
+# model. The caps below only smooth bursts; 0 disables a cap.
+_GLOBAL_MAX_PER_MINUTE = int(os.getenv("GEMINI_MAX_MSGS_PER_MIN", "10"))
+_GLOBAL_MAX_PER_DAY    = int(os.getenv("GEMINI_MAX_MSGS_PER_DAY", "0"))
+_QUOTA_COOLDOWN_SECONDS = 60          # per-minute quota with no retry hint
+_RETIRED_MODEL_COOLDOWN_SECONDS = 24 * 60 * 60
+_DAILY_COOLDOWN_THRESHOLD = 15 * 60   # cooldowns longer than this = daily quota
 
 _budget_lock = threading.Lock()
-_budget = {"minute": [], "day": None, "day_count": 0, "cooldown_until": 0.0}
+_budget = {"minute": [], "day": None, "day_count": 0}
+_model_cooldown: Dict[str, float] = {}   # model -> unix time it may be retried
 
 QUOTA_ERROR = "__QUOTA_ERROR__"
 API_ERROR = "__API_ERROR__"
@@ -200,17 +218,39 @@ BUSY_MESSAGE = (
     "Please try again in about a minute."
 )
 DAILY_LIMIT_MESSAGE = (
-    "⚠️ NFL Pro-Bot has reached its daily question limit. Please come back tomorrow!"
+    "⚠️ NFL Pro-Bot has used up its free AI quota for today. It resets at "
+    "midnight Pacific time — please come back then!"
 )
 
 
+def _seconds_until_pacific_midnight() -> float:
+    """Free-tier daily quotas reset at midnight Pacific time."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    try:
+        from zoneinfo import ZoneInfo
+        pacific = now.astimezone(ZoneInfo("America/Los_Angeles"))
+    except Exception:  # no tz database (e.g. Windows without tzdata)
+        pacific = now.astimezone(datetime.timezone(datetime.timedelta(hours=-7)))
+    midnight = (pacific + datetime.timedelta(days=1)).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    return (midnight - pacific).total_seconds()
+
+
+def _available_models() -> list:
+    """Models in GEMINI_MODELS that aren't cooling down, in order."""
+    now = time.time()
+    with _budget_lock:
+        return [m for m in GEMINI_MODELS if _model_cooldown.get(m, 0) <= now]
+
+
 def _check_global_budget() -> Optional[str]:
-    """Returns a user-facing message if the app-wide budget is spent, else None."""
+    """Returns a user-facing message if the app can't take a question now, else None."""
     now = time.time()
     today = time.strftime("%Y-%m-%d", time.gmtime(now))
     with _budget_lock:
-        if now < _budget["cooldown_until"]:
-            return BUSY_MESSAGE
+        waits = [_model_cooldown.get(m, 0) - now for m in GEMINI_MODELS]
+        if waits and min(waits) > 0:  # every model is cooling down
+            return DAILY_LIMIT_MESSAGE if min(waits) > _DAILY_COOLDOWN_THRESHOLD else BUSY_MESSAGE
         if _budget["day"] != today:
             _budget["day"], _budget["day_count"] = today, 0
         if _GLOBAL_MAX_PER_DAY and _budget["day_count"] >= _GLOBAL_MAX_PER_DAY:
@@ -223,65 +263,108 @@ def _check_global_budget() -> Optional[str]:
     return None
 
 
-def _gemini_error(exc: Exception) -> str:
-    """Maps an SDK exception to a sentinel and logs it without key or prompt text."""
+def _error_details(exc: Exception) -> list:
+    details = (getattr(exc, "details", None) or {})
+    details = details.get("error", details) if isinstance(details, dict) else {}
+    return [d for d in details.get("details", []) if isinstance(d, dict)]
+
+
+def _model_failed(model: str, exc: Exception) -> bool:
+    """
+    Records a failed call on `model`. Returns True when the next model in the
+    chain should be tried (quota spent, model retired, or Google overloaded),
+    False for errors another model wouldn't fix. Logs ids and limits only —
+    never the key or the prompt.
+    """
     code = getattr(exc, "code", None)
     if code == 429:
-        violations = [
-            v.get("quotaId")
-            for d in (getattr(exc, "details", None) or {}).get("error", {}).get("details", [])
-            if isinstance(d, dict) for v in d.get("violations", []) if isinstance(v, dict)
-        ]
-        # A spent daily quota won't recover in a minute; back off longer.
-        cooldown = (_DAILY_QUOTA_COOLDOWN_SECONDS
-                    if any("PerDay" in (q or "") for q in violations)
-                    else _QUOTA_COOLDOWN_SECONDS)
-        with _budget_lock:
-            _budget["cooldown_until"] = time.time() + cooldown
-        logger.warning("Gemini quota exhausted (429) quota_ids=%s - cooling down %ss",
-                       violations, cooldown)
-        return QUOTA_ERROR
-    logger.error("Gemini API call failed: %s code=%s", type(exc).__name__, code)
-    return API_ERROR
+        details = _error_details(exc)
+        violations = [v for d in details for v in d.get("violations", []) if isinstance(v, dict)]
+        daily = any("PerDay" in (v.get("quotaId") or "") for v in violations)
+        retry = next((d.get("retryDelay") for d in details if d.get("retryDelay")), None)
+        if daily:
+            cooldown = _seconds_until_pacific_midnight()
+        else:
+            try:
+                cooldown = float(str(retry).rstrip("s")) + 1 if retry else _QUOTA_COOLDOWN_SECONDS
+            except ValueError:
+                cooldown = _QUOTA_COOLDOWN_SECONDS
+        logger.warning(
+            "Gemini quota exhausted (429) model=%s limits=%s - model paused %ds",
+            model,
+            [f"{v.get('quotaId')}={v.get('quotaValue')}" for v in violations],
+            cooldown,
+        )
+    elif code == 404:
+        cooldown = _RETIRED_MODEL_COOLDOWN_SECONDS
+        logger.error("Gemini model unavailable (404) model=%s - skipping it for 24h", model)
+    elif isinstance(code, int) and code >= 500:
+        cooldown = _QUOTA_COOLDOWN_SECONDS
+        logger.warning("Gemini server error code=%s model=%s - trying next model", code, model)
+    else:
+        logger.error("Gemini API call failed: %s code=%s model=%s", type(exc).__name__, code, model)
+        return False
+    with _budget_lock:
+        _model_cooldown[model] = time.time() + cooldown
+    return True
 
 
 def _call_gemini(system: str, user: str, expect_json: bool = False) -> str:
-    """Blocking call — used for intent extraction."""
+    """Blocking call — used for intent extraction. Falls through GEMINI_MODELS."""
     try:
         client = _get_gemini_client()
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=user,
-            config=types.GenerateContentConfig(system_instruction=system, temperature=0.3),
-        )
+    except ValueError:
+        logger.error("Gemini config error: GEMINI_API_KEY is not set")
+        return CONFIG_ERROR
+    for model in _available_models():
+        try:
+            response = client.models.generate_content(
+                model=model,
+                contents=user,
+                config=types.GenerateContentConfig(system_instruction=system, temperature=0.3),
+            )
+        except Exception as e:
+            if _model_failed(model, e):
+                continue
+            return API_ERROR
         text = (response.text or "").strip()
         if expect_json:
             text = text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         return text
-    except ValueError:
-        logger.error("Gemini config error: invalid configuration (check GEMINI_API_KEY and model name)")
-        return CONFIG_ERROR
-    except Exception as e:
-        return _gemini_error(e)
+    return QUOTA_ERROR
 
 
 def _stream_gemini(system: str, user: str) -> Generator[str, None, None]:
-    """Streaming call — yields tokens as they arrive."""
+    """
+    Streaming call — yields tokens as they arrive. Falls through GEMINI_MODELS
+    while nothing has been yielded; a failure mid-answer yields API_ERROR.
+    """
     try:
         client = _get_gemini_client()
-        stream = client.models.generate_content_stream(
-            model=GEMINI_MODEL,
-            contents=user,
-            config=types.GenerateContentConfig(system_instruction=system, temperature=0.7),
-        )
-        for chunk in stream:
-            if chunk.text:
-                yield chunk.text
     except ValueError:
-        logger.error("Gemini stream config error: invalid configuration (check GEMINI_API_KEY and model name)")
+        logger.error("Gemini config error: GEMINI_API_KEY is not set")
         yield CONFIG_ERROR
-    except Exception as e:
-        yield _gemini_error(e)
+        return
+    for model in _available_models():
+        started = False
+        try:
+            stream = client.models.generate_content_stream(
+                model=model,
+                contents=user,
+                config=types.GenerateContentConfig(system_instruction=system, temperature=0.7),
+            )
+            for chunk in stream:
+                if chunk.text:
+                    started = True
+                    yield chunk.text
+            return
+        except Exception as e:
+            retry_next = _model_failed(model, e)
+            if retry_next and not started:
+                continue
+            yield API_ERROR
+            return
+    yield QUOTA_ERROR
 
 
 # -------------------------------------------------------
