@@ -619,3 +619,89 @@ class TestPresets:
             chatbot.nfl_chatbot_with_context(
                 "WR waivers?", preset={"intents": ["waiver"], "player": "WR"})
         assert "last_player" not in chatbot.st.session_state
+
+
+# ─── Schedules, leaders, player-team fallback, season context ─────
+
+_api_mock.get_week_schedule.return_value = "Week 5 slate"
+_api_mock.get_team_schedule.return_value = "Team schedule"
+_api_mock.get_league_leaders.return_value = "Leaders table"
+_api_mock.current_nfl_season_year.return_value = 2026
+_api_mock.current_nfl_week.return_value = 5
+
+
+class TestNewRouting:
+    def _run(self, **parsed):
+        base = {"intents": [], "team": None, "player": None, "player_b": None,
+                "raw_query": "test"}
+        results, _ = chatbot._dispatch({**base, **parsed})
+        return results
+
+    def test_schedule_without_team_is_league_slate(self):
+        assert self._run(intents=["schedule"])["schedule"] == "Week 5 slate"
+
+    def test_schedule_with_team_and_opponent(self):
+        _api_mock.get_team_schedule.reset_mock()
+        self._run(intents=["schedule"], team="Dallas Cowboys", opponent="Philadelphia Eagles")
+        _api_mock.get_team_schedule.assert_called_once_with(
+            "Dallas Cowboys", opponent="Philadelphia Eagles")
+
+    def test_leaders_passes_stat_and_position(self):
+        _api_mock.get_league_leaders.reset_mock()
+        self._run(intents=["leaders"], player="QB", stat="pts_ppr")
+        _api_mock.get_league_leaders.assert_called_once_with("pts_ppr", position="QB")
+
+    def test_leaders_defaults_to_fantasy_points(self):
+        _api_mock.get_league_leaders.reset_mock()
+        self._run(intents=["leaders"])
+        _api_mock.get_league_leaders.assert_called_once_with("pts_ppr", position=None)
+
+    def test_player_team_fills_team_level_intents(self):
+        _api_mock.get_player_team.reset_mock()
+        _api_mock.get_player_team.return_value = "KC"
+        _api_mock.get_team_schedule.reset_mock()
+        self._run(intents=["injury", "schedule"], player="Patrick Mahomes")
+        _api_mock.get_player_team.assert_called_once_with("Patrick Mahomes")
+        _api_mock.get_team_schedule.assert_called_once_with("KC", opponent=None)
+
+    def test_position_is_not_looked_up_as_player(self):
+        _api_mock.get_player_team.reset_mock()
+        self._run(intents=["schedule"], player="WR")
+        _api_mock.get_player_team.assert_not_called()
+
+
+class TestSeasonContext:
+    def test_extraction_prompt_includes_date_and_season(self):
+        with mock.patch.object(chatbot, "_call_gemini", return_value='{"intents":["general"]}') as call:
+            chatbot._extract_intent("Saquon's stats this season", {})
+        prompt = call.call_args[0][1]
+        assert "Current NFL season: 2026 (Week 5)" in prompt
+        assert str(chatbot.datetime.date.today().year) in prompt
+
+    def test_format_prompt_includes_season(self):
+        prompt = chatbot._build_format_prompt("q", {"scores": "x"}, [], {})
+        assert "Current NFL season: 2026" in prompt
+
+
+class TestCharts:
+    def test_two_players_merge_into_labeled_series(self):
+        charts = {
+            "CeeDee Lamb": {"name": "CeeDee Lamb", "weeks": ["Wk 1", "Wk 2", "Wk 10"], "pts": [20, 30, 40]},
+            "Ja'Marr Chase": {"name": "Ja'Marr Chase", "weeks": ["Wk 2", "Wk 3"], "pts": [26.5, 24.8]},
+        }
+        with mock.patch.object(chatbot, "get_player_chart_data",
+                               side_effect=lambda name, team=None: charts.get(name)):
+            chart = chatbot._build_chart([("CeeDee Lamb", None), ("Ja'Marr Chase", None)])
+        assert chart["weeks"] == ["Wk 1", "Wk 2", "Wk 3", "Wk 10"]  # numeric order
+        assert chart["series"]["CeeDee Lamb"] == [20, 30, None, 40]
+        assert chart["series"]["Ja'Marr Chase"] == [None, 26.5, 24.8, None]
+
+    def test_comparison_prefers_two_player_chart(self):
+        two = {"weeks": ["Wk 1"], "series": {"A": [1], "B": [2]}}
+        one = {"weeks": ["Wk 1"], "series": {"A": [1]}}
+        with mock.patch.dict(chatbot._INTENT_DISPATCH, {
+                "fantasy": lambda *_: {"_text": "f", "chart_data": one},
+                "comparison": lambda *_: {"_text": "c", "chart_data": two}}):
+            _, chart = chatbot._dispatch({"intents": ["fantasy", "comparison"],
+                                          "raw_query": "x"})
+        assert chart is two

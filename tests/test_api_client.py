@@ -899,7 +899,7 @@ class TestStatsCache:
         with patch.object(_client_mod, "fetch_json", return_value=self.RAW), \
              patch.object(_client_mod, "_current_nfl_week", return_value=5):
             data = _client_mod._get_stats(2026, 3)
-        assert data == {"4984": {"pts_ppr": 30.5, "pass_yd": 280}}
+        assert data == {"4984": {"pts_ppr": 30.5, "pass_yd": 280, "gp": 1}}
 
     def test_second_call_is_cached(self):
         with patch.object(_client_mod, "fetch_json", return_value=self.RAW) as mock_fetch, \

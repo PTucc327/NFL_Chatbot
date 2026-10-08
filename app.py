@@ -655,10 +655,28 @@ if not st.session_state.messages:
 # ------------------------------------------------------------------
 # Chat History
 # ------------------------------------------------------------------
+def _render_chart(chart: dict) -> None:
+    """Weekly PPR line chart, one labeled line per player."""
+    series = chart.get("series") or {}
+    if not series or len(chart.get("weeks", [])) < 4:
+        return
+    import pandas as pd
+    # Numeric week index keeps "Wk 10" after "Wk 9" (text labels sort alphabetically).
+    weeks = [int(w.split()[-1]) for w in chart["weeks"]]
+    df = pd.DataFrame(series, index=pd.Index(weeks, name="Week"))
+    st.caption("📈 Weekly PPR fantasy points")
+    # Explicit colors: the dark theme's default first two are both blues.
+    palette = ["#4f8ff0", "#f5a524", "#3ecf8e", "#e5484d"]
+    st.line_chart(df, x_label="Week", y_label="PPR points",
+                  color=palette[:len(df.columns)])
+
+
 for message in st.session_state.messages:
     avatar = "🏈" if message["role"] == "assistant" else "🙋"
     with st.chat_message(message["role"], avatar=avatar):
         st.markdown(message["content"])
+        if message.get("chart"):
+            _render_chart(message["chart"])
         if ts := message.get("time"):
             st.markdown(f'<div class="msg-time">{ts}</div>', unsafe_allow_html=True)
 
@@ -772,13 +790,12 @@ if final_query:
                 full_response = st.write_stream(
                     _typewriter(itertools.chain([first_chunk], response.stream))
                 )
-                # Render weekly PPR sparkline if chart data was returned.
-                if response.chart_data and len(response.chart_data.get("pts", [])) >= 4:
-                    import pandas as pd
-                    _df = pd.DataFrame({"PPR Points": response.chart_data["pts"]}, index=response.chart_data["weeks"])
-                    st.line_chart(_df)
+                # Weekly PPR chart, kept with the message so it survives reruns.
+                if response.chart_data:
+                    _render_chart(response.chart_data)
                 st.markdown(f'<div class="msg-time">{reply_time}</div>', unsafe_allow_html=True)
-                st.session_state.messages.append({"role": "assistant", "content": full_response, "time": reply_time})
+                st.session_state.messages.append({"role": "assistant", "content": full_response,
+                                                  "time": reply_time, "chart": response.chart_data})
 
         # --- Missing API key (non-streaming path, e.g. a future blocking call) ---
         elif isinstance(response, str) and response.startswith("__CONFIG_ERROR__"):

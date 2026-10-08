@@ -404,7 +404,11 @@ def get_live_scores(team_name: Optional[str] = None):
         state  = comp.get("status", {}).get("type", {}).get("state", "pre")
         detail = comp.get("status", {}).get("type", {}).get("shortDetail", "")
 
-        line = f"{aw_name} **{aw_score}** @ {hm_name} **{hm_score}**{venue_str} ({to_et(dt)}, {detail})"
+        if state == "pre":
+            # No score before kickoff — "0 @ 0" reads like a result or a record.
+            line = f"{aw_name} @ {hm_name}{venue_str} ({to_et(dt)}{_broadcast_suffix(comp)})"
+        else:
+            line = f"{aw_name} **{aw_score}** @ {hm_name} **{hm_score}**{venue_str} ({to_et(dt)}, {detail})"
 
         if team_q and team_q not in (aw_name + hm_name).lower(): continue
         results[state].append(line)
@@ -530,6 +534,212 @@ def get_last_game(team_name: str) -> str:
     comp = past[0].get("competitions", [{}])[0]
     scores = [f"{c['team']['displayName']} {c.get('score', {}).get('displayValue', '0')}" for c in comp.get("competitors", [])]
     return f"In their last outing, here's how it finished: {' - '.join(scores)} ({to_et(parse_iso_datetime(past[0].get('date')))}). 🏟️"
+
+
+def _fmt_num(value: Any) -> str:
+    """222.0 -> '222', 1234 -> '1,234', 18.94 -> '18.9' (Sleeper sends floats)."""
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    return f"{int(num):,}" if num.is_integer() else f"{num:,.1f}"
+
+
+def _broadcast_suffix(comp: Dict[str, Any]) -> str:
+    """', Prime Video' for a competition with a listed TV broadcast, else ''."""
+    names = [n for b in comp.get("broadcasts", []) for n in b.get("names", [])]
+    if not names:
+        names = [m for b in comp.get("broadcasts", [])
+                 if (m := (b.get("media") or {}).get("shortName"))]
+    return f", {names[0]}" if names else ""
+
+
+def _to_eastern(dt: datetime.datetime) -> datetime.datetime:
+    try:
+        from zoneinfo import ZoneInfo
+        return dt.astimezone(ZoneInfo("America/New_York"))
+    except Exception:  # no tz database: approximate EDT/EST
+        offset = -4 if 3 <= dt.month <= 11 else -5
+        return dt.astimezone(datetime.timezone(datetime.timedelta(hours=offset)))
+
+
+def _slot_label(et: datetime.datetime) -> str:
+    """Primetime label for a kickoff in Eastern time."""
+    if et.hour >= 19:
+        return {3: "Thursday Night Football", 6: "Sunday Night Football",
+                0: "Monday Night Football"}.get(et.weekday(), "Primetime")
+    return ""
+
+
+def get_week_schedule() -> str:
+    """This week's full slate grouped by day, with primetime games and bye teams."""
+    data = fetch_json(ENDPOINTS["scoreboard"])
+    if "__error" in data:
+        return "I'm having trouble reaching the NFL schedule right now. 🏈"
+
+    week = (data.get("week") or {}).get("number")
+    events = sorted(data.get("events", []), key=lambda e: e.get("date", ""))
+    if not events:
+        return "There are no NFL games on the schedule this week."
+
+    out = [f"🗓️ **NFL Week {week} Schedule**" if week else "🗓️ **This Week's NFL Schedule**"]
+    current_day = None
+    for ev in events:
+        comp = ev.get("competitions", [{}])[0]
+        teams = comp.get("competitors", [])
+        away = next((t for t in teams if t.get("homeAway") == "away"), {})
+        home = next((t for t in teams if t.get("homeAway") == "home"), {})
+        dt = parse_iso_datetime(ev.get("date"))
+        et = _to_eastern(dt) if dt else None
+        day = f"{et:%A, %b} {et.day}" if et else "TBD"
+        if day != current_day:
+            out.append(f"\n**{day}**")
+            current_day = day
+
+        state = comp.get("status", {}).get("type", {}).get("state", "pre")
+        aw = away.get("team", {}).get("displayName", "TBD")
+        hm = home.get("team", {}).get("displayName", "TBD")
+        if state == "pre":
+            when = f"{et:%I:%M %p} ET".lstrip("0") if et else "TBD"
+            matchup = f"{aw} @ {hm} — {when}{_broadcast_suffix(comp)}"
+        else:
+            detail = comp.get("status", {}).get("type", {}).get("shortDetail", "")
+            matchup = (f"{aw} **{away.get('score', '0')}** @ {hm} "
+                       f"**{home.get('score', '0')}** ({detail})")
+        slot = _slot_label(et) if et else ""
+        out.append(f"- {matchup}" + (f" 🌙 *{slot}*" if slot else ""))
+
+    byes = [t.get("displayName") for t in (data.get("week") or {}).get("teamsOnBye", [])]
+    out.append(f"\n**On bye:** {', '.join(byes)}" if byes else "\n**On bye:** none this week")
+    return "\n".join(out)
+
+
+def get_team_schedule(team_name: str, opponent: Optional[str] = None) -> str:
+    """
+    A team's full regular season: results so far, then remaining games,
+    with record and bye week. With `opponent`, only games against that team
+    ("when do the Cowboys play the Eagles?").
+    """
+    meta = find_team(team_name)
+    if not meta:
+        return f"I couldn't find a team named '{team_name}'."
+    data = fetch_json(meta["schedule_url"])
+    if "__error" in data:
+        return f"I'm having trouble pulling the {meta['displayName']} schedule right now."
+
+    opp_meta = find_team(opponent) if opponent else None
+    record = (data.get("team") or {}).get("recordSummary")
+    bye = data.get("byeWeek")
+    header = f"🗓️ **{meta['displayName']} Schedule**"
+    if opp_meta:
+        header = f"🗓️ **{meta['displayName']} vs {opp_meta['displayName']} this season**"
+    out = [header + (f"  (record: {record}" + (f", bye: Week {bye}" if bye else "") + ")"
+                     if record else "")]
+
+    next_marked = False
+    for ev in data.get("events", []):
+        comp = ev.get("competitions", [{}])[0]
+        teams = comp.get("competitors", [])
+        us = next((t for t in teams if str(t.get("team", {}).get("id")) == meta["id"]), None)
+        them = next((t for t in teams if t is not us), None)
+        if not us or not them:
+            continue
+        if opp_meta and str(them.get("team", {}).get("id")) != opp_meta["id"]:
+            continue
+
+        week = (ev.get("week") or {}).get("number", "?")
+        where = "vs" if us.get("homeAway") == "home" else "@"
+        opp_name = them.get("team", {}).get("displayName", "TBD")
+        state = comp.get("status", {}).get("type", {}).get("state", "pre")
+        dt = parse_iso_datetime(ev.get("date"))
+        if ev.get("timeValid") is False and dt:
+            # Late-season kickoffs are set later ("flex"); ESPN sends midnight.
+            et = _to_eastern(dt)
+            when = f"{et:%a %b} {et.day}, time TBD"
+        else:
+            when = to_et(dt)
+        if state == "post":
+            ours = (us.get("score") or {}).get("displayValue", "?")
+            theirs = (them.get("score") or {}).get("displayValue", "?")
+            result = "W" if us.get("winner") else ("L" if them.get("winner") else "T")
+            out.append(f"- Wk {week}: {where} {opp_name} — **{result} {ours}-{theirs}**")
+        else:
+            marker = ""
+            if state == "in":
+                marker = " 🔴 **LIVE**"
+            elif not next_marked:
+                marker, next_marked = " ⏭️ **next**", True
+            out.append(f"- Wk {week}: {where} {opp_name} — {when}{marker}")
+
+    if len(out) == 1:
+        if opp_meta:
+            return (f"The {meta['displayName']} don't play the {opp_meta['displayName']} "
+                    f"in the regular season this year.")
+        return f"I couldn't find any games on the {meta['displayName']} schedule."
+    return "\n".join(out)
+
+
+# Stat keys a fan can ask leaders for, with display labels.
+LEADER_STATS = {
+    "pass_yd": "passing yards", "pass_td": "passing TDs", "pass_int": "interceptions thrown",
+    "rush_yd": "rushing yards", "rush_td": "rushing TDs",
+    "rec": "receptions", "rec_yd": "receiving yards", "rec_td": "receiving TDs",
+    "pts_ppr": "PPR fantasy points", "pts_half_ppr": "half-PPR fantasy points",
+    "pts_std": "standard fantasy points",
+}
+
+
+def get_league_leaders(stat: Optional[str] = "pts_ppr", position: Optional[str] = None,
+                       top_n: int = 10) -> str:
+    """
+    Season leaders for a stat ("passing yards leaders"), optionally by
+    position ("top 5 fantasy QBs" = pts_ppr, QB). Uses the cached Sleeper
+    season stats, so it costs no extra requests after the first.
+    """
+    stat = stat if stat in LEADER_STATS else "pts_ppr"
+    pos = position.upper() if position and position.upper() in POSITIONS else None
+    year = _current_nfl_season_year()
+    stats = _get_stats(year)
+    if stats is None:
+        return "I couldn't reach the stats service for league leaders right now."
+    _ensure_player_cache()
+
+    rows = []
+    for pid, s in stats.items():
+        value = s.get(stat)
+        p = _PLAYER_CACHE.get(pid)
+        if not value or not p or not p.get("full_name"):
+            continue
+        if pos and p.get("position") != pos:
+            continue
+        rows.append((value, p, s.get("gp")))
+    if not rows:
+        return f"No {LEADER_STATS[stat]} recorded yet this season."
+
+    rows.sort(key=lambda r: r[0], reverse=True)
+    label = LEADER_STATS[stat]
+    title = f"{pos} " if pos else ""
+    out = [f"🏆 **{year} Leaders — {title}{label}** (through Week {max(1, _current_nfl_week() - 1)})"]
+    for rank, (value, p, gp) in enumerate(rows[:max(1, min(top_n, 25))], 1):
+        games = f", {_fmt_num(gp)} GP" if gp else ""
+        out.append(f"{rank}. **{p['full_name']}** ({p.get('position', '?')}, "
+                   f"{p.get('team') or 'FA'}) — {_fmt_num(value)}{games}")
+    return "\n".join(out)
+
+
+# Public names for the season/week helpers (used by the chatbot's prompts).
+def current_nfl_season_year() -> int:
+    return _current_nfl_season_year()
+
+
+def current_nfl_week() -> int:
+    return _current_nfl_week()
+
+
+def get_player_team(player_name: str) -> Optional[str]:
+    """Team abbreviation of the best-matching active player, e.g. 'KC'."""
+    resolved = _resolve_player(player_name)
+    return resolved[1].get("team") if resolved else None
 
 
 def get_team_roster(team_name: str, position: Optional[str] = None) -> str:
@@ -669,8 +879,8 @@ def _resolve_player(name: str, team: Optional[str] = None) -> Optional[tuple]:
 # a single player question used to fetch up to 18 of them uncached. Keep
 # only the fields the app reads; finished weeks rarely change (stat
 # corrections land within a day or two), the in-progress week changes live.
-_STAT_FIELDS = ("pts_ppr", "pass_yd", "pass_td", "pass_int", "rush_yd",
-                "rush_td", "rec", "rec_yd", "rec_td")
+_STAT_FIELDS = ("pts_ppr", "pts_half_ppr", "pts_std", "gp", "pass_yd", "pass_td",
+                "pass_int", "rush_yd", "rush_td", "rec", "rec_yd", "rec_td")
 _FINAL_STATS_TTL = 60 * 60 * 24
 _LIVE_STATS_TTL = 60 * 15
 _STATS_CACHE: Dict[tuple, tuple] = {}   # key -> (fetched_at, trimmed data)
@@ -894,21 +1104,21 @@ def get_player_weekly_stats(player_name: str, num_weeks: int = 5,
 
         if pos == "QB":
             stat_line = (
-                f"Pass: {s.get('pass_yd', 0)} yds / {s.get('pass_td', 0)} TD / "
-                f"{s.get('pass_int', 0)} INT | "
-                f"Rush: {s.get('rush_yd', 0)} yds | "
+                f"Pass: {_fmt_num(s.get('pass_yd', 0))} yds / {_fmt_num(s.get('pass_td', 0))} TD / "
+                f"{_fmt_num(s.get('pass_int', 0))} INT | "
+                f"Rush: {_fmt_num(s.get('rush_yd', 0))} yds | "
                 f"**{pts} pts**"
             )
         elif pos in ("RB",):
             stat_line = (
-                f"Rush: {s.get('rush_yd', 0)} yds / {s.get('rush_td', 0)} TD | "
-                f"Rec: {s.get('rec', 0)} / {s.get('rec_yd', 0)} yds | "
+                f"Rush: {_fmt_num(s.get('rush_yd', 0))} yds / {_fmt_num(s.get('rush_td', 0))} TD | "
+                f"Rec: {_fmt_num(s.get('rec', 0))} / {_fmt_num(s.get('rec_yd', 0))} yds | "
                 f"**{pts} pts**"
             )
         elif pos in ("WR", "TE"):
             stat_line = (
-                f"Rec: {s.get('rec', 0)} / {s.get('rec_yd', 0)} yds / "
-                f"{s.get('rec_td', 0)} TD | "
+                f"Rec: {_fmt_num(s.get('rec', 0))} / {_fmt_num(s.get('rec_yd', 0))} yds / "
+                f"{_fmt_num(s.get('rec_td', 0))} TD | "
                 f"**{pts} pts**"
             )
         else:
@@ -1198,6 +1408,7 @@ def get_player_chart_data(player_name: str, team: Optional[str] = None) -> Optio
 
     sorted_weeks = sorted(week_pts.keys())
     return {
+        "name": resolved[1].get("full_name", player_name),
         "weeks": [f"Wk {w}" for w in sorted_weeks],
         "pts": [week_pts[w] for w in sorted_weeks],
     }
@@ -1262,21 +1473,21 @@ def get_player_history(
 
         if pos == "QB":
             stat_line = (
-                f"Pass: {s.get('pass_yd', 0)} yds / {s.get('pass_td', 0)} TD / "
-                f"{s.get('pass_int', 0)} INT | "
-                f"Rush: {s.get('rush_yd', 0)} yds | "
+                f"Pass: {_fmt_num(s.get('pass_yd', 0))} yds / {_fmt_num(s.get('pass_td', 0))} TD / "
+                f"{_fmt_num(s.get('pass_int', 0))} INT | "
+                f"Rush: {_fmt_num(s.get('rush_yd', 0))} yds | "
                 f"**{pts} pts**"
             )
         elif pos == "RB":
             stat_line = (
-                f"Rush: {s.get('rush_yd', 0)} yds / {s.get('rush_td', 0)} TD | "
-                f"Rec: {s.get('rec', 0)} / {s.get('rec_yd', 0)} yds | "
+                f"Rush: {_fmt_num(s.get('rush_yd', 0))} yds / {_fmt_num(s.get('rush_td', 0))} TD | "
+                f"Rec: {_fmt_num(s.get('rec', 0))} / {_fmt_num(s.get('rec_yd', 0))} yds | "
                 f"**{pts} pts**"
             )
         elif pos in ("WR", "TE"):
             stat_line = (
-                f"Rec: {s.get('rec', 0)} / {s.get('rec_yd', 0)} yds / "
-                f"{s.get('rec_td', 0)} TD | "
+                f"Rec: {_fmt_num(s.get('rec', 0))} / {_fmt_num(s.get('rec_yd', 0))} yds / "
+                f"{_fmt_num(s.get('rec_td', 0))} TD | "
                 f"**{pts} pts**"
             )
         else:

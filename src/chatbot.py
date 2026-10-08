@@ -32,7 +32,6 @@ from google.genai import types
 from src.api_client import (
     get_live_scores,
     get_standings,
-    get_next_game,
     get_last_game,
     get_team_news,
     get_league_headlines,
@@ -49,6 +48,12 @@ from src.api_client import (
     get_player_history,
     get_player_chart_data,
     detect_team_from_query,
+    get_week_schedule,
+    get_team_schedule,
+    get_league_leaders,
+    get_player_team,
+    current_nfl_season_year,
+    current_nfl_week,
 )
 
 logger = logging.getLogger(__name__)
@@ -73,6 +78,9 @@ VALID_POSITIONS = {"QB", "RB", "WR", "TE", "K", "DE", "DT", "LB", "CB", "S"}
 
 # Subset of VALID_POSITIONS that are relevant for fantasy waiver filtering.
 _WAIVER_POSITIONS = {"QB", "RB", "WR", "TE"}
+
+# Intents answered at team level; a named player's team fills in when absent.
+_TEAM_LEVEL_INTENTS = {"schedule", "last_game", "odds", "scores", "standings", "news"}
 
 # Keywords that indicate a sit/start question rather than a raw stats lookup.
 _SIT_START_KEYWORDS = frozenset({"start", "sit", "bench", "lineup", "waiver", "should i"})
@@ -101,6 +109,8 @@ class IntentHandler(Protocol):
         player_b: Optional[str],
         raw_query: str,
         season: Optional[int],
+        opponent: Optional[str],
+        stat: Optional[str],
     ) -> Any: ...
 
 
@@ -383,7 +393,9 @@ Schema:
   "team": "team name as a string, or null",
   "player": "player full name as a string, or null",
   "player_b": "second player full name for comparisons or trades, or null",
-  "season": "4-digit season year as integer, or null (e.g. 2024 for 'last year')",
+  "opponent": "second TEAM full name for team-vs-team questions, or null",
+  "stat": "for leaders: one of pass_yd, pass_td, pass_int, rush_yd, rush_td, rec, rec_yd, rec_td, pts_ppr, pts_half_ppr, pts_std — or null",
+  "season": "4-digit season year as integer, or null",
   "raw_query": "the original user query unchanged"
 }
 
@@ -394,7 +406,12 @@ Allowed intents (pick ALL that apply — multi-intent is supported):
   news        — team or league news and headlines
   league_news — general NFL news not tied to one team ("around the league",
                 "biggest storylines", "what's happening in the NFL")
-  schedule    — upcoming game schedule
+  schedule    — game schedule: a team's next/remaining games or a matchup date
+                ("when do the Cowboys play the Eagles"), OR — with no team —
+                this week's league slate ("Thursday Night Football tonight",
+                "who's on bye", "what games are on Sunday")
+  leaders     — league or position leaders and rankings ("who leads in passing
+                yards", "top 5 fantasy QBs", "most receiving TDs")
   player      — player profile, career stats, or scouting report
   injury      — player injury status, practice participation, return timeline
   fantasy     — fantasy points, sit/start advice, or waiver recommendations
@@ -424,14 +441,36 @@ Rules:
 - If the query mentions roster, depth chart, backup, who starts, who plays → use "roster" intent.
   - If a position is mentioned (QB, RB, WR, TE, etc.) alongside the roster question,
     set "player" to that position string (e.g. "WR").
-- For history intent: extract the season year into "season" when the user says "last year",
-  "in 2024", "during the 2023 season", etc. If no year is mentioned, set "season" to null.
+- Seasons: use the current season given in the context line. "This season" or
+  "this year" → null (the app defaults to the current season). "Last season" /
+  "last year" → current season minus 1. Only set an explicit year the user names.
+  An NFL season is named for the year it starts (Feb 2026 Super Bowl = 2025 season).
+- For team-vs-team questions ("when do the Cowboys play the Eagles", "Bills vs
+  Chiefs history"), put the first team in "team" and the second in "opponent".
+- For leaders: set "stat" (fantasy rankings → pts_ppr unless half-PPR/standard is
+  named) and put a position filter (QB, RB, WR, TE, K) in "player". "Top N" goes
+  nowhere — the app shows the top 10.
+- "How did X beat/lose to Y", "what was the score" about a past game → "last_game".
 - If the query is ambiguous, pick the most likely intent.
 - Use "news" when a specific team is named or implied. Use "league_news"
   when the question is about the NFL broadly — no specific team, phrases
   like "around the league", "biggest storylines". Both can appear
   together, e.g. intents=["news","league_news"].
 """
+
+def _season_context() -> str:
+    """
+    Today's date and the current season for both prompts. Without it the model
+    falls back to its training-data year ("this season" became 2024).
+    """
+    today = datetime.date.today()
+    try:
+        season, week = current_nfl_season_year(), current_nfl_week()
+        season_str = f"Current NFL season: {season} (Week {week})."
+    except Exception:  # stats service down — the date alone still helps
+        season_str = ""
+    return f"Today is {today:%A, %B} {today.day}, {today.year}. {season_str}".strip()
+
 
 def _extract_intent(user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
     """Parse the query into structured intent + entities via Gemini."""
@@ -449,7 +488,7 @@ def _extract_intent(user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
             hints.append(f'active comparison: {cs.get("player_a")} vs {cs.get("player_b")}')
 
     context_hint = f'\nContext: {", ".join(hints)}.' if hints else ""
-    user_prompt = f"{context_hint}\n\nUser query: {user_input}"
+    user_prompt = f"{_season_context()}{context_hint}\n\nUser query: {user_input}"
     raw = _call_gemini(_EXTRACTION_SYSTEM, user_prompt, expect_json=True)
 
     if raw.startswith("__"):
@@ -475,28 +514,45 @@ def _extract_intent(user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
 # -------------------------------------------------------
 
 
-def _build_chart_data(player_name: str, team: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def _build_chart(players: list) -> Optional[Dict[str, Any]]:
     """
-    Delegates to api_client.get_player_chart_data — returns weekly PPR data
-    for a sparkline chart, or None if insufficient data.
+    Weekly PPR chart for one or more (name, team) players:
+    {"weeks": ["Wk 1", ...], "series": {"Full Name": [pts or None, ...]}}.
+    Players with too little data are left out; None if none qualify.
     """
-    try:
-        return get_player_chart_data(player_name, team=team)
-    except Exception as e:
-        logger.warning(f"chart_data build failed for {player_name}: {e}")
+    per_player = []
+    for name, team in players:
+        try:
+            data = get_player_chart_data(name, team=team)
+        except Exception as e:
+            logger.warning(f"chart_data build failed for {name}: {e}")
+            data = None
+        if data:
+            per_player.append(data)
+    if not per_player:
         return None
+    weeks = sorted({w for d in per_player for w in d["weeks"]},
+                   key=lambda w: int(w.split()[-1]))
+    series = {}
+    for d in per_player:
+        pts = dict(zip(d["weeks"], d["pts"]))
+        series[d.get("name", "PPR")] = [pts.get(w) for w in weeks]
+    return {"weeks": weeks, "series": series}
 
 
-def _maybe_attach_chart(result: Any, player_name: str, team: Optional[str] = None) -> Any:
-    """Attach chart_data to a plain-text result if sparkline data is available.
+def _with_chart(result: Any, players: list) -> Any:
+    """Attach a chart to a plain-text result when chart data is available.
 
-    Chart is only appended to string responses — structured dicts carry their
-    own data and don't need a sparkline overlay.
+    Structured dicts (e.g. disambiguation) are returned unchanged.
     """
     if not isinstance(result, str):
         return result
-    chart = _build_chart_data(player_name, team)
+    chart = _build_chart(players)
     return {"_text": result, "chart_data": chart} if chart else result
+
+
+def _maybe_attach_chart(result: Any, player_name: str, team: Optional[str] = None) -> Any:
+    return _with_chart(result, [(player_name, team)])
 
 
 def _position_hint(player: Optional[str], valid: AbstractSet[str]) -> Optional[str]:
@@ -527,7 +583,8 @@ def _handle_fantasy(team, player, _player_b, raw_query, *_):
 
 def _handle_comparison(_team, player, player_b, *_):
     if player and player_b:
-        return get_player_comparison(player, player_b)
+        return _with_chart(get_player_comparison(player, player_b),
+                           [(player, None), (player_b, None)])
     if player:
         return f"I need two players to compare. Who should I compare {player} against?"
     return "Please name two players to compare."
@@ -535,7 +592,8 @@ def _handle_comparison(_team, player, player_b, *_):
 
 def _handle_trade(_team, player, player_b, *_):
     if player and player_b:
-        return get_trade_analysis(player, player_b)
+        return _with_chart(get_trade_analysis(player, player_b),
+                           [(player, None), (player_b, None)])
     if player:
         return f"I need both players in the trade. Who would you get in return for {player}?"
     return "Please name both players in the trade."
@@ -551,6 +609,16 @@ def _handle_roster(team, player, *_):
         return "Which team's roster would you like to see?"
     # Position hint stored in the player slot (mirrors waiver pattern).
     return get_team_roster(team, position=_position_hint(player, VALID_POSITIONS))
+
+
+def _handle_schedule(team, _player, _player_b, _raw_query, _season, opponent=None, *_):
+    # No team: the league-wide slate ("TNF tonight?", "who's on bye?").
+    return get_team_schedule(team, opponent=opponent) if team else get_week_schedule()
+
+
+def _handle_leaders(_team, player, _player_b, _raw_query, _season, _opponent=None, stat=None, *_):
+    # Position filter rides in the player slot, as for roster/waiver.
+    return get_league_leaders(stat or "pts_ppr", position=_position_hint(player, VALID_POSITIONS))
 
 
 def _handle_history(team, player, _player_b, _raw_query, season, *_):
@@ -569,7 +637,8 @@ _INTENT_DISPATCH: Dict[str, IntentHandler] = {
     "standings":   lambda t, *_: get_standings(t),
     "news":        lambda t, *_: get_team_news(t or "NFL"),
     "league_news": lambda *_: get_league_headlines(),
-    "schedule":    lambda t, *_: get_next_game(t) if t else "Please specify a team.",
+    "schedule":    _handle_schedule,
+    "leaders":     _handle_leaders,
     "injury":      lambda t, p, *_: get_player_injury(p or t) if (p or t) else "Which player's injury status?",
     "odds":        lambda t, *_: get_game_odds(t) if t else "Which team's betting lines?",
     "player":      _handle_player,
@@ -584,12 +653,13 @@ _INTENT_DISPATCH: Dict[str, IntentHandler] = {
 
 def _fetch_one(intent: str, team: Optional[str], player: Optional[str],
                player_b: Optional[str], raw_query: str,
-               season: Optional[int] = None) -> tuple[str, Any]:
+               season: Optional[int] = None, opponent: Optional[str] = None,
+               stat: Optional[str] = None) -> tuple[str, Any]:
     """Fetch data for a single intent. Runs in a thread pool."""
     try:
         handler = _INTENT_DISPATCH.get(intent)
         if handler:
-            return intent, handler(team, player, player_b, raw_query, season)
+            return intent, handler(team, player, player_b, raw_query, season, opponent, stat)
         return intent, None  # "general" and unknown intents — Gemini answers from knowledge
     except Exception as e:
         logger.error(f"Dispatch error for intent '{intent}': {e}")
@@ -611,12 +681,23 @@ def _dispatch(parsed: Dict[str, Any]) -> tuple[Dict[str, Any], Optional[Dict[str
     player   = parsed.get("player")
     player_b = parsed.get("player_b")
     season   = parsed.get("season")
+    opponent = parsed.get("opponent")
+    stat     = parsed.get("stat")
     raw      = parsed.get("raw_query", "")
+
+    # "Is Mahomes playing this week?" — team-level data for a named player
+    # uses his team instead of asking the user which team that is.
+    if (not team and player and not _position_hint(player, VALID_POSITIONS)
+            and set(intents) & _TEAM_LEVEL_INTENTS):
+        try:
+            team = get_player_team(player)
+        except Exception as e:
+            logger.warning("player team lookup failed: %s", e)
 
     results: Dict[str, Any] = {}
     pool = ThreadPoolExecutor(max_workers=min(len(intents), 5))
     futures = {
-        pool.submit(_fetch_one, intent, team, player, player_b, raw, season): intent
+        pool.submit(_fetch_one, intent, team, player, player_b, raw, season, opponent, stat): intent
         for intent in intents
     }
     try:
@@ -635,11 +716,10 @@ def _dispatch(parsed: Dict[str, Any]) -> tuple[Dict[str, Any], Optional[Dict[str
 
     # Extract chart_data in one pass here rather than forcing the caller to
     # iterate results a second time.
-    chart_data: Optional[Dict[str, Any]] = None
-    for result in results.values():
-        if isinstance(result, dict) and "chart_data" in result:
-            chart_data = result["chart_data"]
-            break
+    # Prefer the chart with the most players (a comparison over a single profile).
+    charts = [r["chart_data"] for r in results.values()
+              if isinstance(r, dict) and r.get("chart_data")]
+    chart_data = max(charts, key=lambda c: len(c.get("series", {})), default=None)
 
     return results, chart_data
 
@@ -709,6 +789,7 @@ def _build_format_prompt(user_input: str, data_results: Dict[str, Any],
             data_str += f"\n[{intent.upper()} DATA]\n{data}\n"
 
     return (
+        f"{_season_context()}\n"
         f"{history_str}{state_str}"
         f"\nUser just asked: {user_input}"
         f"\nRaw data to work with:{data_str}"
