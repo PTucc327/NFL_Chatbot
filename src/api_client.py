@@ -570,6 +570,22 @@ def get_standings(team_query: Optional[str] = None, division: Optional[str] = No
     return "\n".join(out)
 
 
+def get_team_records() -> Dict[str, Dict[str, Any]]:
+    """
+    {team display name: {"record", "division", "seed", "streak"}} for UI
+    badges (the sidebar team card). Empty dict when standings are unavailable.
+    """
+    data = fetch_json(ENDPOINTS["standings"], params={"level": 3})
+    if "__error" in data:
+        return {}
+    records = {}
+    for g in _standings_groups(data):
+        for r in g["rows"]:
+            records[r["name"]] = {"record": r["record"], "division": g["division"] or g["conf"],
+                                  "seed": r["seed"], "streak": r["streak"]}
+    return records
+
+
 def get_playoff_picture(conference: Optional[str] = None) -> str:
     """
     Current playoff seeding per conference: seeds 1-4 (division leaders),

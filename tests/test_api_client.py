@@ -1352,3 +1352,15 @@ class TestLiveBoxScoreSituation:
             _client_mod._SUMMARY_CACHE.clear()
         assert "🔴 LIVE" in out
         assert "**Right now:** 🏈 ARI ball, 3rd & 4 at NYG 15 — last play: Pass complete for 4 yards." in out
+
+
+class TestTeamRecords:
+    def test_records_for_sidebar_card(self):
+        with patch.object(_client_mod, "fetch_json", return_value=LEVEL3_STANDINGS):
+            records = _client_mod.get_team_records()
+        assert records["Kansas City Chiefs"] == {"record": "4-0", "division": "AFC West",
+                                                 "seed": 1, "streak": "W1"}
+
+    def test_unavailable_standings_give_empty_dict(self):
+        with patch.object(_client_mod, "fetch_json", return_value={"__error": "x"}):
+            assert _client_mod.get_team_records() == {}

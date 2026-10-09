@@ -31,8 +31,25 @@ def test_sidebar_collapsed_on_phone_and_openable(phone):
     content = phone.page.locator('[data-testid="stSidebarUserContent"]')
     assert not content.is_visible()
     phone.open_sidebar()  # regression: hiding the whole header removed this control
-    text = content.inner_text()
-    assert text.index("TEAM LOOKUP") < text.index("Set your favorite team")
+    tabs = [t.strip() for t in phone.sidebar.get_by_role("tab").all_inner_texts()]
+    assert [t.split()[-1] for t in tabs] == ["Team", "League", "Fantasy", "Me"]
+
+
+def test_phone_sidebar_closes_after_a_tool_and_grid_stays_two_wide(phone):
+    phone.accept_consent()
+    phone.open_sidebar()
+    phone.sidebar_tab("League")
+    tops = phone.page.evaluate("""[...document.querySelectorAll(
+        'section[data-testid=stSidebar] div.stButton button')]
+        .filter(b => b.offsetParent && /This Week|Playoffs/.test(b.innerText))
+        .map(b => Math.round(b.getBoundingClientRect().top))""")
+    assert len(tops) == 2 and tops[0] == tops[1]  # side by side, not stacked
+    phone.sidebar.get_by_role("button", name=re.compile("This Week")).click()
+    phone.wait_idle()
+    phone.page.wait_for_timeout(1500)
+    # The answer must not be hidden behind the sidebar.
+    assert not phone.page.locator('[data-testid="stSidebarUserContent"]').is_visible()
+    assert "Week" in phone.last_answer()
 
 
 def test_phone_header_clear_of_sidebar_toggle(phone):
@@ -80,33 +97,63 @@ def test_typed_question_and_player_selection(app):
 
 # ─── Sidebar tools ────────────────────────────────────────────────
 
-def test_sidebar_team_stats_button(app):
+def test_team_buttons_wait_for_a_team(app):
     app.accept_consent()
+    for name in ("Daily Briefing", "Team Stats", "Roster"):
+        assert app.sidebar.get_by_role("button", name=re.compile(name)).first.is_disabled()
+
+
+def test_team_card_and_team_stats_button(app):
+    app.accept_consent()
+    app.choose_team("Kansas City")
+    card = app.sidebar.locator(".team-card").first.inner_text()
+    assert "Kansas City Chiefs" in card
+    assert re.search(r"\d+-\d+", card) and "AFC West" in card  # record and division
     app.sidebar.get_by_role("button", name=re.compile("Team Stats")).click()
     app.wait_idle()
     answer = app.last_answer()
     assert "Team Rankings" in answer and "Defense" in answer
 
 
-def test_sidebar_labels_fit_on_one_line(app):
+def test_empty_fantasy_input_explains_itself(app):
     app.accept_consent()
-    overflow = app.page.evaluate("""() => [...document.querySelectorAll(
-        'section[data-testid=stSidebar] div.stButton > button')]
-        .map(b => [b.innerText.trim(), b.scrollWidth - b.clientWidth])
-        .filter(([, extra]) => extra > 1)""")
-    assert overflow == []
+    app.sidebar_tab("Fantasy")
+    before = app.messages().count()
+    app.sidebar.get_by_role("button", name=re.compile("Outlook")).click()
+    app.page.locator('[data-testid="stToast"]').first.wait_for(timeout=10_000)
+    assert "player" in app.page.locator('[data-testid="stToast"]').first.inner_text().lower()
+    assert app.messages().count() == before
+
+
+def test_sidebar_tabs_and_labels_fit(app):
+    app.accept_consent()
+    app.choose_team("Kansas City")  # enabled buttons
+    tab_overflow = app.page.evaluate("""() => { const t = document.querySelector(
+        'section[data-testid=stSidebar] [data-baseweb=tab-list]');
+        return t.scrollWidth - t.clientWidth; }""")
+    assert tab_overflow <= 1, "all four tabs must fit without scrolling"
+    for tab in ("Team", "League", "Fantasy", "Me"):
+        app.sidebar_tab(tab)
+        bad = app.page.evaluate("""() => [...document.querySelectorAll(
+            'section[data-testid=stSidebar] div.stButton button')]
+            .filter(b => b.offsetParent && b.innerText.trim())
+            .filter(b => b.scrollWidth - b.clientWidth > 1 || b.getBoundingClientRect().height > 46)
+            .map(b => b.innerText.trim())""")
+        assert bad == [], (tab, bad)  # one line each, nothing cut off
 
 
 def test_favorite_team_becomes_lookup_team(app):
     app.accept_consent()
     sb = app.sidebar
-    sb.locator("summary").filter(has_text="Set your favorite team").click()
-    sb.get_by_label("Favorite team").click()
+    app.sidebar_tab("Me")
+    sb.get_by_role("combobox", name=re.compile("Favorite team")).click()
     app.page.keyboard.type("Philadelphia")
     app.page.keyboard.press("Enter")
     sb.get_by_role("button", name="Save Profile").click()
     app.wait_idle()
-    assert "Get My Updates" in sb.inner_text()
+    app.sidebar_tab("Me")
+    assert sb.get_by_role("button", name=re.compile("Get My Updates")).is_visible()
+    app.sidebar_tab("Team")
     lookup = sb.locator('[data-testid="stSelectbox"]').first.inner_text().strip()
     assert lookup.startswith("Philadelphia Eagles")
     assert app.page.locator('[data-testid="stException"]').count() == 0

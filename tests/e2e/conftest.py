@@ -114,6 +114,18 @@ class App:
         self.page.locator('[data-testid="stExpandSidebarButton"]').first.click(force=True)
         self.page.locator('[data-testid="stSidebarUserContent"]').wait_for(state="visible")
 
+    def sidebar_tab(self, name: str):
+        self.sidebar.get_by_role("tab", name=re.compile(name)).click()
+        time.sleep(0.6)
+
+    def choose_team(self, team: str):
+        """Pick a team in the sidebar's Team tab (typing filters the list)."""
+        self.sidebar_tab("Team")
+        self.sidebar.get_by_role("combobox", name="Team", exact=True).click()
+        self.page.keyboard.type(team)
+        self.page.keyboard.press("Enter")
+        self.wait_idle()
+
     def messages(self):
         return self.page.locator('[data-testid="stChatMessage"]')
 
