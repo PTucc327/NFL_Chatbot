@@ -37,3 +37,6 @@ scripts/update_data.log
 # Test / tooling caches
 .pytest_cache/
 bandit_report.json
+
+# Browser test artifacts
+tests/e2e/app_server.log

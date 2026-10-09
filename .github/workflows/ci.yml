@@ -70,3 +70,33 @@ jobs:
         # --strict fails the job on any known CVE; --desc adds vuln descriptions.
         # Remove --strict if you want warnings-only while still seeing the report.
         run: pip-audit -r requirements.txt -r requirements-dev.txt --desc --strict
+
+  e2e:
+    name: Browser Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies and Chromium
+        run: |
+          pip install -r requirements-dev.txt
+          python -m playwright install --with-deps chromium
+
+      - name: Run browser tests
+        # NFL_BOT_FAKE_LLM is set by the test fixtures: no API key or quota used.
+        env:
+          RUN_E2E: "1"
+        run: python -m pytest tests/e2e -v
+
+      - name: Upload app server log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-app-server-log
+          path: tests/e2e/app_server.log

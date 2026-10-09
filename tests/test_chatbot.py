@@ -942,3 +942,20 @@ class TestGeminiTimeout:
 
     def test_timeout_never_below_google_minimum(self):
         assert chatbot._GEMINI_TIMEOUT_MS >= 10_000
+
+
+class TestFakeLlmStandIns:
+    def test_fake_extract_player_question(self):
+        out = json.loads(chatbot._fake_extract("Context: x\n\nUser query: Tell me about Justin Jefferson?"))
+        assert out["intents"] == ["player"] and out["player"] == "Justin Jefferson"
+
+    def test_fake_extract_other_question(self):
+        out = json.loads(chatbot._fake_extract("User query: who won last night"))
+        assert out["intents"] == ["general"] and out["player"] is None
+
+    def test_fake_answer_echoes_data(self):
+        prompt = "Today...\nUser just asked: q\nRaw data to work with:\n[SCORES DATA]\nBills 24\nWrite your response:"
+        assert chatbot._fake_answer(prompt) == "[test mode] [SCORES DATA]\nBills 24"
+
+    def test_off_unless_env_set(self):
+        assert chatbot._FAKE_LLM is False

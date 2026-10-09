@@ -157,16 +157,22 @@ No cron server, no scheduled task, no infrastructure needed.
 ## Running Tests
 
 ```bash
-pytest tests/ -v
+pip install -r requirements-dev.txt
+python -m pytest tests/ -q                 # unit tests — all HTTP and Gemini calls mocked
 ```
 
-134 tests, all run without a live API key — all HTTP calls are mocked.
+**Browser tests** start the real app and drive it in Chromium: first visit,
+example questions, typed questions with player selection, sidebar tools,
+favorites, viewer-timezone timestamps, and phone layout.
 
+```bash
+python -m playwright install chromium      # once
+RUN_E2E=1 python -m pytest tests/e2e -v    # or add PW_CHANNEL=msedge to use Edge
 ```
-tests/test_utils.py         # Fuzzy matching, datetime helpers, networking
-tests/test_api_client.py    # All data-fetching functions, cache logic
-tests/test_chatbot.py       # Intent routing, conversation state, rate limiting
-```
+
+They run the app with `NFL_BOT_FAKE_LLM=1`, which swaps Gemini for stand-ins
+that echo the fetched data, so no API key or quota is used. CI runs both suites
+on every push, plus a secrets scan and a dependency CVE audit.
 
 ---
 

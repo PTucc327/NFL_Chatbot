@@ -367,6 +367,32 @@ def _strip_foreign_script(text: str) -> str:
     return cleaned
 
 
+# Test mode for the browser (e2e) tests: deterministic stand-ins for Gemini,
+# so the UI, routing and live data can be exercised in CI without an API key
+# or free-tier quota. Never set NFL_BOT_FAKE_LLM in production.
+_FAKE_LLM = os.getenv("NFL_BOT_FAKE_LLM") == "1"
+if _FAKE_LLM:
+    logger.warning("NFL_BOT_FAKE_LLM=1 — Gemini is replaced by test stand-ins")
+
+_FAKE_PLAYER_RE = re.compile(r"tell me about (.+?)[?.!]*$", re.I)
+
+
+def _fake_extract(user_prompt: str) -> str:
+    """Typed questions in test mode: 'Tell me about X' → player intent, else general."""
+    query = user_prompt.rsplit("User query:", 1)[-1].strip()
+    m = _FAKE_PLAYER_RE.search(query)
+    parsed = {"intents": ["player"] if m else ["general"], "team": None,
+              "player": m.group(1).strip() if m else None, "player_b": None,
+              "season": None, "raw_query": query}
+    return json.dumps(parsed)
+
+
+def _fake_answer(user_prompt: str) -> str:
+    """Formatting in test mode: echo the fetched data, unmodified."""
+    data = user_prompt.split("Raw data to work with:", 1)[-1].split("Write your response:", 1)[0]
+    return "[test mode] " + (data.strip() or "No data for that question.")
+
+
 # Thinking off: answers here restate fetched data, and Flash's default
 # "thinking" delayed the first word by ~4s (0.6s without). Some models reject
 # the setting (gemini-3.5-flash-lite: 400); those are retried once without it
@@ -394,6 +420,8 @@ def _rejects_thinking_config(model: str, exc: Exception) -> bool:
 
 def _call_gemini(system: str, user: str, expect_json: bool = False) -> str:
     """Blocking call — used for intent extraction. Falls through GEMINI_EXTRACT_MODELS."""
+    if _FAKE_LLM:
+        return _fake_extract(user)
     try:
         client = _get_gemini_client()
     except ValueError:
@@ -427,6 +455,9 @@ def _stream_gemini(system: str, user: str) -> Generator[str, None, None]:
     Streaming call — yields tokens as they arrive. Falls through GEMINI_FORMAT_MODELS
     while nothing has been yielded; a failure mid-answer yields API_ERROR.
     """
+    if _FAKE_LLM:
+        yield _fake_answer(user)
+        return
     try:
         client = _get_gemini_client()
     except ValueError:
