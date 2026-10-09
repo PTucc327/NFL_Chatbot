@@ -483,11 +483,22 @@ def team_logo_url(name_or_abbr: str) -> str:
 # Sidebar: One-Click Quick Actions
 # ------------------------------------------------------------------
 @st.cache_data(ttl=600, show_spinner=False)
+def _team_records_cached() -> dict:
+    records = api_client.get_team_records()
+    if not records:
+        # Raising keeps a failed lookup out of the cache (exceptions aren't
+        # cached), so the next rerun retries instead of showing no records
+        # for 10 minutes.
+        raise RuntimeError("standings unavailable")
+    return records
+
+
 def _team_records() -> dict:
     """Record / division / seed per team for the sidebar card (10-min cache)."""
     try:
-        return api_client.get_team_records()
-    except Exception:
+        return _team_records_cached()
+    except Exception as e:
+        api_client.logger.warning("team records unavailable for sidebar card: %r", e)
         return {}
 
 
