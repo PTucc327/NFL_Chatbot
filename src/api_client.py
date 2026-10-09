@@ -392,7 +392,7 @@ def _live_situation(situation: Optional[Dict[str, Any]], teams: List[Dict[str, A
         parts.append(f"🏈 {poss} ball")
     if situation.get("isRedZone"):
         parts.append("🔴 red zone")
-    last = (situation.get("lastPlay") or {}).get("text")
+    last = ((situation.get("lastPlay") or {}).get("text") or "").strip()
     text = " · ".join(parts)
     if last:
         text += (" — " if text else "") + f"last play: {last}"
@@ -918,6 +918,12 @@ def get_box_score(team_name: str, opponent: Optional[str] = None,
 
     live = " 🔴 LIVE" if status.get("state") == "in" else ""
     situation = summary.get("situation") or comp.get("situation")
+    if live and not situation:
+        # The game summary omits down & distance; the scoreboard has it.
+        board = fetch_json(ENDPOINTS["scoreboard"])
+        ev = next((e for e in board.get("events", []) if str(e.get("id")) == str(event.get("id"))), None)
+        if ev:
+            situation = (ev.get("competitions") or [{}])[0].get("situation")
     out = [f"📦 **Box Score{live}: {name(away)} {away.get('score', '?')} @ "
            f"{name(home)} {home.get('score', '?')}** ({detail})",
            " · ".join(x for x in (f"Week {week_no}" if week_no else "", when,

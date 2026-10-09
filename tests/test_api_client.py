@@ -5,6 +5,7 @@ Loads the real module via importlib so it is never affected by mocks in other
 test files. All HTTP calls are patched out with unittest.mock.
 """
 import datetime
+import json
 import importlib.util
 import os
 import sys
@@ -1320,3 +1321,34 @@ class TestDraftContext:
         assert "Ryan Williams" not in out      # veteran, not this draft class
         assert "Unranked Rookie" not in out    # obscure rookies are noise
         assert "- Arch Manning (QB, Texas)" in out
+
+
+class TestLiveBoxScoreSituation:
+    def test_live_box_score_takes_situation_from_scoreboard(self):
+        live_summary = json.loads(json.dumps(_SUMMARY))
+        comp = live_summary["header"]["competitions"][0]
+        comp["status"]["type"]["state"] = "in"
+        comp["competitors"][0]["team"]["id"] = "22"
+        scoreboard = {"events": [{"id": "e4", "competitions": [{"situation": {
+            "possession": "22", "downDistanceText": "3rd & 4 at NYG 15",
+            "lastPlay": {"text": " Pass complete for 4 yards."}}}]}]}
+        schedule = {"events": [dict(_sched_event("e4", 4, "22", "in"))]}
+
+        def fetch(url, params=None, headers=None):
+            if url.startswith("sched/"):
+                return schedule
+            if params == {"event": "e4"}:
+                return live_summary
+            return scoreboard
+        _client_mod._TEAM_CACHE = _BOX_TEAMS
+        _client_mod._TEAM_CACHE_LAST = datetime.datetime.now().timestamp() + 9999
+        _client_mod._SUMMARY_CACHE.clear()
+        try:
+            with patch.object(_client_mod, "fetch_json", side_effect=fetch):
+                out = _client_mod.get_box_score("New York Giants")
+        finally:
+            _client_mod._TEAM_CACHE = {}
+            _client_mod._TEAM_CACHE_LAST = 0
+            _client_mod._SUMMARY_CACHE.clear()
+        assert "🔴 LIVE" in out
+        assert "**Right now:** 🏈 ARI ball, 3rd & 4 at NYG 15 — last play: Pass complete for 4 yards." in out
