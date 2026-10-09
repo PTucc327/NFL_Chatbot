@@ -66,11 +66,12 @@ logger = logging.getLogger(__name__)
 
 # Free-tier models, tried in order. Each model has its own free quota
 # (per Google Cloud project), so falling through a chain adds their daily
-# capacity together. Two chains: reading the question is a small structured
-# task, so it starts on the lite model; writing the answer users read starts
-# on full Flash (the lite model occasionally emitted stray non-English
-# words). Override with GEMINI_EXTRACT_MODELS / GEMINI_FORMAT_MODELS, or
-# GEMINI_MODELS to use one chain for both.
+# capacity together. Measured on the free tier (first-token latency):
+# 3.5-flash-lite ~0.6s with a generous quota; 2.5-flash ~0.4s but ~20
+# requests/day; 3.5-flash 8-14s and only ~2 requests/minute — so it is a
+# backup, not the default. The lite model once emitted a stray non-English
+# word; _strip_foreign_script filters that. Override with
+# GEMINI_EXTRACT_MODELS / GEMINI_FORMAT_MODELS, or GEMINI_MODELS for both.
 def _model_list(env: str, default: tuple) -> list:
     raw = os.getenv(env) or os.getenv("GEMINI_MODELS") or ",".join(default)
     return [m.strip() for m in raw.split(",") if m.strip()]
@@ -78,10 +79,10 @@ def _model_list(env: str, default: tuple) -> list:
 
 GEMINI_EXTRACT_MODELS = _model_list("GEMINI_EXTRACT_MODELS", (
     "gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-3.5-flash",
-    "gemini-3.1-flash-lite",   # slowest in testing (~16s); last resort
+    "gemini-3.1-flash-lite",   # slowest in testing (~7-16s); last resort
 ))
 GEMINI_FORMAT_MODELS = _model_list("GEMINI_FORMAT_MODELS", (
-    "gemini-3.5-flash", "gemini-2.5-flash", "gemini-3.5-flash-lite",
+    "gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-3.5-flash",
     "gemini-3.1-flash-lite",
 ))
 # Every model in use, for app-wide checks ("is anything still available?").
