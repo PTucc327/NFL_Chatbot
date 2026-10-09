@@ -115,8 +115,8 @@ flowchart LR
 
 | Job | What it checks |
 |---|---|
-| Unit tests | 255 tests; all HTTP and Gemini calls mocked |
-| Browser tests | 10 Playwright tests drive the real app (first visit, questions, player selection, sidebar tools, timezones, phone layout). Gemini is replaced by a stand-in, so no key or quota is used |
+| Unit tests | 267 tests; all HTTP and Gemini calls mocked |
+| Browser tests | 13 Playwright tests drive the real app (first visit, questions, player selection, sidebar tools, timezones, phone layout). Gemini is replaced by a stand-in, so no key or quota is used |
 | Secrets scan | `detect-secrets` blocks any credential not in the baseline |
 | Dependency audit | `pip-audit --strict` on production and dev requirements |
 
@@ -184,6 +184,16 @@ RUN_E2E=1 python -m pytest tests/e2e -v                       # macOS / Linux
 $env:RUN_E2E = "1"; python -m pytest tests/e2e -v             # Windows PowerShell
 ```
 
+**Answer-quality evals** run 27 real fan questions through the real pipeline
+(Gemini and live data) and check each answer against the data it was given:
+numbers grounded in the data, the right team/player understood, the Super Bowl
+winner named, and so on. Run them before and after changing prompts or models;
+see [evals/README.md](evals/README.md).
+
+```bash
+python -m evals.run            # ~55 free-tier Gemini requests, ~2 minutes
+```
+
 To use an installed browser instead of Playwright's Chromium, set
 `PW_CHANNEL=msedge` (or `chrome`). The app runs with `NFL_BOT_FAKE_LLM=1` in
 these tests: Gemini is swapped for stand-ins that echo the fetched data.
@@ -240,8 +250,9 @@ NFL_Chatbot/
 ├── data/                     # teams, legends (109), prospects, weekly rosters
 ├── scripts/update_data.py    # Roster refresh and prospect pruning
 ├── tests/
-│   ├── test_*.py             # Unit tests (255)
-│   └── e2e/                  # Playwright browser tests (10)
+│   ├── test_*.py             # Unit tests (267)
+│   └── e2e/                  # Playwright browser tests (13)
+├── evals/                    # Answer-quality evals: 27 real questions + checks
 ├── docs/screenshots/         # README images, captured from the live app
 ├── .github/workflows/        # ci.yml (4 jobs) · refresh_data.yml (weekly)
 ├── .streamlit/config.toml    # Dark theme, headless server
@@ -289,6 +300,6 @@ NFL_Chatbot/
 - [x] Fantasy: sit/start, comparisons, trades, trending waiver adds
 - [x] Past playoffs and Super Bowls
 - [x] Free-tier model chains, browser tests in CI, public deployment
-- [ ] Answer-quality test set, run before prompt or model changes
+- [x] Answer-quality evals (27 cases), run before prompt or model changes
 - [ ] Connect a Sleeper league (real waiver availability, your roster)
 - [ ] Injury alerts for a favorite team

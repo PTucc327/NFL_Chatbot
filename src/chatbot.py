@@ -952,9 +952,12 @@ Guidelines:
 - For player comparisons: highlight the key statistical and contextual differences.
 - For trade advice: give a clear verdict (Accept/Decline/Counter) first, then reasoning.
 - For waiver wire: list players in rank order, give a one-line reason for each pickup.
-- For draft prospects: name college players from your knowledge, say rankings are
-  as of your latest information, and NEVER present anyone in the ALREADY DRAFTED
-  list as a prospect — they are NFL players now.
+- For draft prospects: do NOT list prospects from your own knowledge — it
+  predates the latest drafts, and players you remember as college prospects
+  are mostly in the NFL now. Name only the players in the curated prospect
+  list, say plainly that a full, current big board isn't available here, and
+  suggest a current big board (ESPN, NFL.com, The Athletic). NEVER present
+  anyone in the ALREADY DRAFTED list as a prospect — they are NFL players now.
 - For team rankings: answer the part asked about (offense, defense, run defense…)
   using the values and ranks given; rank 1 is the best of 32. Name a strength or
   weakness when it explains the team's record.

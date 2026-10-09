@@ -1260,7 +1260,7 @@ def get_draft_context(limit: int = 80) -> str:
             + (f", from {p['college']}" if p.get("college") else "") + ")" for p in rookies]
     curated = [f"- {p['name']} ({p.get('pos', '?')}, {p.get('school', '?')})" for p in _PROSPECTS.values()]
     if curated:
-        out += ["", "Known college prospects (curated list, may be incomplete):"] + curated
+        out += ["", "Known college prospects (curated; the only prospects to name):"] + curated
     return "\n".join(out)
 
 
@@ -1555,6 +1555,12 @@ def get_player_profile_smart(user_input: str, team: Optional[str] = None) -> Uni
     active_matches = [p for p in matches if p.get("active")]
     if active_matches:
         matches = active_matches
+    # Sleeper lists unsigned free agents as active; one rostered match among
+    # them is who the user means (asking "which Jalen Hurts?" between the
+    # Eagles QB and two free agents was pointless).
+    rostered = [p for p in matches if p.get("team")]
+    if rostered:
+        matches = rostered
 
     # Narrow by team — explicit argument first, else a team named in the query.
     # Compare Sleeper abbreviations exactly; substring checks let free agents

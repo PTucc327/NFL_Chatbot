@@ -820,7 +820,8 @@ class TestTeamQualifiedProfile:
     def test_same_name_without_team_asks_which_one(self):
         result = get_player_profile_smart("justin jefferson")
         assert isinstance(result, dict) and result["type"] == "selection_required"
-        assert len(result["matches"]) == 3
+        # The two rostered players; the unsigned free agent is dropped.
+        assert len(result["matches"]) == 2
 
     def test_team_argument_selects_one_player(self):
         with patch.object(_client_mod, "get_fantasy_player_stats", return_value="0 pts"):
@@ -1364,3 +1365,25 @@ class TestTeamRecords:
     def test_unavailable_standings_give_empty_dict(self):
         with patch.object(_client_mod, "fetch_json", return_value={"__error": "x"}):
             assert _client_mod.get_team_records() == {}
+
+
+
+class TestRosteredPreference:
+    def test_rostered_player_beats_same_name_free_agents(self):
+        _client_mod._PLAYER_CACHE = {
+            "qb": {"full_name": "Jalen Hurts", "position": "QB", "team": "PHI", "active": True, "years_exp": 6},
+            "fa1": {"full_name": "Jalen Hurts", "position": "WR", "team": None, "active": True},
+            "fa2": {"full_name": "Jalen Hurts", "position": "DL", "team": None, "active": True},
+        }
+        with patch.object(_client_mod, "get_fantasy_player_stats", return_value="0 pts"):
+            out = _client_mod.get_player_profile_smart("jalen hurts")
+        assert isinstance(out, str) and "PHI" in out
+
+    def test_two_rostered_players_still_ask(self):
+        _client_mod._PLAYER_CACHE = {
+            "a": {"full_name": "Justin Jefferson", "position": "WR", "team": "MIN", "active": True},
+            "b": {"full_name": "Justin Jefferson", "position": "LB", "team": "CLE", "active": True},
+            "c": {"full_name": "Justin Jefferson", "position": "S", "team": None, "active": True},
+        }
+        out = _client_mod.get_player_profile_smart("justin jefferson")
+        assert isinstance(out, dict) and len(out["matches"]) == 2

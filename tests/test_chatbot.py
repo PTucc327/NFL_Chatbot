@@ -859,7 +859,9 @@ class TestDraftRouting:
         assert results["draft"] == "ALREADY DRAFTED ..."
 
     def test_format_rule_forbids_drafted_players(self):
-        assert "NEVER present anyone in the ALREADY DRAFTED" in chatbot._FORMATTING_SYSTEM
+        rule = " ".join(chatbot._FORMATTING_SYSTEM.split())
+        assert "NEVER present anyone in the ALREADY DRAFTED list as a prospect" in rule
+        assert "do NOT list prospects from your own knowledge" in rule
 
 
 
