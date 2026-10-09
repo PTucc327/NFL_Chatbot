@@ -15,11 +15,13 @@ import time
 import random
 import datetime
 import itertools
+import threading
 import streamlit as st
 from dotenv import load_dotenv
 from streamlit_mic_recorder import speech_to_text
 
 from src.chatbot import nfl_chatbot_with_context, ChatbotResponse, QUOTA_ERROR, BUSY_MESSAGE
+from src import api_client
 
 load_dotenv()
 
@@ -50,6 +52,58 @@ def _save_prefs(prefs: dict) -> None:
             json.dump(prefs, f)
     except Exception:
         pass  # non-fatal — profile just won't persist across restarts
+
+# ------------------------------------------------------------------
+# Viewer-local time. The server clock is UTC on Streamlit Cloud, so
+# timestamps use the browser's timezone (st.context), falling back to
+# its UTC offset, then to US Eastern (NFL kickoff times are listed in ET).
+# ------------------------------------------------------------------
+def _now_local() -> datetime.datetime:
+    utc_now = datetime.datetime.now(datetime.timezone.utc)
+    try:
+        tz_name = st.context.timezone
+        if tz_name:
+            from zoneinfo import ZoneInfo
+            return utc_now.astimezone(ZoneInfo(tz_name))
+    except Exception:
+        pass
+    try:
+        offset = st.context.timezone_offset  # JS getTimezoneOffset(): minutes *behind* UTC
+        if offset is not None:
+            return utc_now.astimezone(datetime.timezone(datetime.timedelta(minutes=-offset)))
+    except Exception:
+        pass
+    try:
+        from zoneinfo import ZoneInfo
+        return utc_now.astimezone(ZoneInfo("America/New_York"))
+    except Exception:
+        return utc_now
+
+
+def _clock() -> str:
+    return _now_local().strftime("%I:%M %p").lstrip("0")
+
+
+# ------------------------------------------------------------------
+# Cache warm-up — once per server process, in the background, so the
+# first visitor after a cold start (Streamlit Cloud sleeps idle apps)
+# doesn't wait ~3s for the player list, teams, week and season stats.
+# ------------------------------------------------------------------
+@st.cache_resource(show_spinner=False)
+def _start_cache_warmup() -> bool:
+    def warm():
+        for step in (api_client._ensure_player_cache, api_client.ensure_team_cache,
+                     api_client.current_nfl_week,
+                     lambda: api_client._get_stats(api_client.current_nfl_season_year())):
+            try:
+                step()
+            except Exception as e:  # warm-up is best-effort
+                api_client.logger.warning("cache warm-up step failed: %s", e)
+    threading.Thread(target=warm, name="cache-warmup", daemon=True).start()
+    return True
+
+
+_start_cache_warmup()
 
 # ------------------------------------------------------------------
 # Input Sanitization — applied to all free-text player name fields.
@@ -751,7 +805,7 @@ if final_query:
     final_query = final_query.strip()[:500]
 
 if final_query:
-    now = datetime.datetime.now().strftime("%I:%M %p")
+    now = _clock()
     st.session_state.messages.append({"role": "user", "content": final_query, "time": now})
     with st.chat_message("user", avatar="🙋"):
         st.markdown(final_query)
@@ -765,7 +819,7 @@ if final_query:
             # disappears as the answer starts typing out.
             response = nfl_chatbot_with_context(final_query, preset=final_preset)
 
-        reply_time = datetime.datetime.now().strftime("%I:%M %p")
+        reply_time = _clock()
 
         # --- Streaming text response (the normal case) ---
         if isinstance(response, ChatbotResponse):

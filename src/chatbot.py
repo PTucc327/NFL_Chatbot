@@ -164,7 +164,13 @@ def _get_gemini_client() -> genai.Client:
                     "GEMINI_API_KEY is not set. "
                     "Add it to your .env file — get a free key at https://aistudio.google.com/app/apikey"
                 )
-            _gemini_client = genai.Client(api_key=api_key)
+            # Free-tier latency varies (2-7s typical; one request took 60s in
+            # testing). Past the deadline a model is skipped for the next one.
+            # Google's minimum is 10s.
+            _gemini_client = genai.Client(
+                api_key=api_key,
+                http_options=types.HttpOptions(timeout=_GEMINI_TIMEOUT_MS),
+            )
     return _gemini_client
 
 # -------------------------------------------------------
@@ -228,6 +234,7 @@ def _check_rate_limit() -> Optional[str]:
 _GLOBAL_MAX_PER_MINUTE = int(os.getenv("GEMINI_MAX_MSGS_PER_MIN", "10"))
 _GLOBAL_MAX_PER_DAY    = int(os.getenv("GEMINI_MAX_MSGS_PER_DAY", "0"))
 _QUOTA_COOLDOWN_SECONDS = 60          # per-minute quota with no retry hint
+_GEMINI_TIMEOUT_MS = max(10_000, int(os.getenv("GEMINI_TIMEOUT_MS", "20000")))  # Google min: 10s
 _RETIRED_MODEL_COOLDOWN_SECONDS = 24 * 60 * 60
 _DAILY_COOLDOWN_THRESHOLD = 15 * 60   # cooldowns longer than this = daily quota
 
@@ -330,6 +337,10 @@ def _model_failed(model: str, exc: Exception) -> bool:
     elif isinstance(code, int) and code >= 500:
         cooldown = _QUOTA_COOLDOWN_SECONDS
         logger.warning("Gemini server error code=%s model=%s - trying next model", code, model)
+    elif code is None and "timeout" in f"{type(exc).__name__} {exc}".lower():
+        cooldown = _QUOTA_COOLDOWN_SECONDS
+        logger.warning("Gemini timed out after %sms model=%s - trying next model",
+                       _GEMINI_TIMEOUT_MS, model)
     else:
         logger.error("Gemini API call failed: %s code=%s model=%s", type(exc).__name__, code, model)
         return False
@@ -355,6 +366,31 @@ def _strip_foreign_script(text: str) -> str:
     return cleaned
 
 
+# Thinking off: answers here restate fetched data, and Flash's default
+# "thinking" delayed the first word by ~4s (0.6s without). Some models reject
+# the setting (gemini-3.5-flash-lite: 400); those are retried once without it
+# and remembered.
+_NO_THINKING_CONFIG: set = set()
+
+
+def _gen_config(model: str, system: str, temperature: float) -> "types.GenerateContentConfig":
+    if model in _NO_THINKING_CONFIG:
+        return types.GenerateContentConfig(system_instruction=system, temperature=temperature)
+    return types.GenerateContentConfig(
+        system_instruction=system, temperature=temperature,
+        thinking_config=types.ThinkingConfig(thinking_budget=0),
+    )
+
+
+def _rejects_thinking_config(model: str, exc: Exception) -> bool:
+    """True (and remembered) when `model` refused the thinking setting."""
+    if getattr(exc, "code", None) == 400 and model not in _NO_THINKING_CONFIG:
+        logger.info("model=%s rejected thinking_budget=0; retrying without it", model)
+        _NO_THINKING_CONFIG.add(model)
+        return True
+    return False
+
+
 def _call_gemini(system: str, user: str, expect_json: bool = False) -> str:
     """Blocking call — used for intent extraction. Falls through GEMINI_EXTRACT_MODELS."""
     try:
@@ -363,16 +399,21 @@ def _call_gemini(system: str, user: str, expect_json: bool = False) -> str:
         logger.error("Gemini config error: GEMINI_API_KEY is not set")
         return CONFIG_ERROR
     for model in _available_models(GEMINI_EXTRACT_MODELS):
-        try:
-            response = client.models.generate_content(
-                model=model,
-                contents=user,
-                config=types.GenerateContentConfig(system_instruction=system, temperature=0.3),
-            )
-        except Exception as e:
-            if _model_failed(model, e):
-                continue
-            return API_ERROR
+        response = None
+        for _attempt in range(2):
+            try:
+                response = client.models.generate_content(
+                    model=model, contents=user, config=_gen_config(model, system, 0.3),
+                )
+                break
+            except Exception as e:
+                if _rejects_thinking_config(model, e):
+                    continue
+                if _model_failed(model, e):
+                    break
+                return API_ERROR
+        if response is None:
+            continue
         text = (response.text or "").strip()
         if expect_json:
             text = text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
@@ -392,25 +433,26 @@ def _stream_gemini(system: str, user: str) -> Generator[str, None, None]:
         yield CONFIG_ERROR
         return
     for model in _available_models(GEMINI_FORMAT_MODELS):
-        started = False
-        try:
-            stream = client.models.generate_content_stream(
-                model=model,
-                contents=user,
-                config=types.GenerateContentConfig(system_instruction=system, temperature=0.7),
-            )
-            for chunk in stream:
-                text = _strip_foreign_script(chunk.text or "")
-                if text:
-                    started = True
-                    yield text
-            return
-        except Exception as e:
-            retry_next = _model_failed(model, e)
-            if retry_next and not started:
-                continue
-            yield API_ERROR
-            return
+        for _attempt in range(2):
+            started = False
+            try:
+                stream = client.models.generate_content_stream(
+                    model=model, contents=user, config=_gen_config(model, system, 0.7),
+                )
+                for chunk in stream:
+                    text = _strip_foreign_script(chunk.text or "")
+                    if text:
+                        started = True
+                        yield text
+                return
+            except Exception as e:
+                if not started and _rejects_thinking_config(model, e):
+                    continue  # same model, without the thinking setting
+                retry_next = _model_failed(model, e)
+                if retry_next and not started:
+                    break  # next model
+                yield API_ERROR
+                return
     yield QUOTA_ERROR
 
 

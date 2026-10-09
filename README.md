@@ -109,15 +109,32 @@ streamlit run app.py
 
 ## Deploying to Streamlit Community Cloud
 
-1. Push the repo to GitHub (make sure `.env` is in `.gitignore` — it is by default).
-2. Go to [share.streamlit.io](https://share.streamlit.io) → **New app** → select this repo.
-3. Set **Main file path** to `app.py`.
-4. Under **Advanced settings → Secrets**, add:
-   ```toml
-   GEMINI_API_KEY = "your_key_here"
-   REPO_URL = "https://github.com/PTucc327/NFL_Chatbot"
-   ```
-5. Deploy. The app will be live at a `*.streamlit.app` URL.
+1. Push the repo to GitHub (`.env` and `.streamlit/secrets.toml` are gitignored).
+2. Go to [share.streamlit.io](https://share.streamlit.io) → **Create app** → **Deploy a public app from GitHub**.
+3. Repository `PTucc327/NFL_Chatbot`, branch `main`, main file path `app.py`.
+4. Open **Advanced settings**:
+   - **Python version:** `3.12` (matches CI).
+   - **Secrets:**
+     ```toml
+     GEMINI_API_KEY = "your_key_here"
+     REPO_URL = "https://github.com/PTucc327/NFL_Chatbot"
+     ```
+     Root-level secrets are exposed to the app as environment variables.
+     Optional tuning keys (models, rate caps, timeout) are listed in `template.env`.
+5. **Deploy.** The app installs `requirements.txt` only (test tools live in
+   `requirements-dev.txt`) and is live at a `*.streamlit.app` URL.
+
+Notes:
+- **Free Gemini tier:** each model has its own daily quota (reset at midnight
+  Pacific). The app falls through its model chains when one runs out and shows a
+  "come back later" message when all are spent. Check your limits at
+  [aistudio.google.com/rate-limit](https://aistudio.google.com/rate-limit).
+- **Sleeping apps:** Community Cloud sleeps apps after inactivity. The app warms
+  its data caches in the background at startup, so the first question after a
+  wake-up isn't slowed by data loading.
+- **Timestamps** show in each viewer's own timezone (the server clock is UTC).
+- **Never enable `ENABLE_LOCAL_PREFS`** on a hosted app: all visitors would share
+  one favorites file.
 
 > **Never commit `.env` or paste secrets into the code.** The app reads them from environment variables at runtime.
 

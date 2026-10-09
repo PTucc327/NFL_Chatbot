@@ -370,6 +370,7 @@ class _FakeQuotaError(Exception):
 def fresh_budget():
     chatbot._budget.update(minute=[], day=None, day_count=0)
     chatbot._model_cooldown.clear()
+    chatbot._NO_THINKING_CONFIG.clear()
     yield
     chatbot._budget.update(minute=[], day=None, day_count=0)
     chatbot._model_cooldown.clear()
@@ -536,7 +537,8 @@ class TestModelChain:
     def test_bad_request_does_not_burn_other_models(self, chain):
         fm = chain({"m-lite": _ApiErr(400), "m-flash": "ok", "m-last": "ok"})
         assert chatbot._call_gemini("sys", "q") == chatbot.API_ERROR
-        assert fm.calls == ["m-lite"]
+        # One retry without the thinking setting, then give up — never other models.
+        assert fm.calls == ["m-lite", "m-lite"]
 
     def test_every_model_exhausted_returns_quota_error(self, chain):
         q = _quota("GenerateRequestsPerDayPerProjectPerModel-FreeTier")
@@ -858,3 +860,85 @@ class TestDraftRouting:
 
     def test_format_rule_forbids_drafted_players(self):
         assert "NEVER present anyone in the ALREADY DRAFTED" in chatbot._FORMATTING_SYSTEM
+
+
+
+# ─── Thinking setting (latency) ───────────────────────────────────
+
+class _ConfigRecordingModels(_FakeModels):
+    """Rejects any config that carries thinking_config for `strict` models."""
+    def __init__(self, behavior, strict):
+        super().__init__(behavior)
+        self.strict, self.configs = strict, []
+
+    def _check(self, model, config):
+        self.configs.append((model, config))
+        if model in self.strict and getattr(config, "thinking_config", None) is not None:
+            raise _ApiErr(400)
+
+    def generate_content(self, model, config=None, **kw):
+        self._check(model, config)
+        return super().generate_content(model, **kw)
+
+    def generate_content_stream(self, model, config=None, **kw):
+        self._check(model, config)
+        return super().generate_content_stream(model, **kw)
+
+
+class TestThinkingSetting:
+    @pytest.fixture
+    def recording(self, fresh_budget):
+        fake = mock.Mock()
+        real_types = chatbot.types
+
+        class _Cfg:  # stand-in for types.GenerateContentConfig / ThinkingConfig
+            def __init__(self, **kw):
+                self.__dict__.update(kw)
+                self.thinking_config = kw.get("thinking_config")
+        fake_types = mock.Mock(GenerateContentConfig=_Cfg, ThinkingConfig=lambda **kw: kw)
+        with mock.patch.object(chatbot, "types", fake_types), \
+             mock.patch.object(chatbot, "GEMINI_EXTRACT_MODELS", ["lite", "flash"]), \
+             mock.patch.object(chatbot, "GEMINI_FORMAT_MODELS", ["lite", "flash"]), \
+             mock.patch.object(chatbot, "GEMINI_MODELS", ["lite", "flash"]), \
+             mock.patch.object(chatbot, "_get_gemini_client", return_value=fake):
+            def setup(behavior, strict=()):
+                fake.models = _ConfigRecordingModels(behavior, set(strict))
+                return fake.models
+            yield setup
+        assert real_types  # keep the reference alive
+
+    def test_thinking_off_by_default(self, recording):
+        fm = recording({"lite": "ok", "flash": "ok"})
+        chatbot._call_gemini("s", "q")
+        assert fm.configs[0][1].thinking_config == {"thinking_budget": 0}
+
+    def test_model_rejecting_setting_is_retried_without_it_and_remembered(self, recording):
+        fm = recording({"lite": '{"ok": 1}', "flash": "unused"}, strict={"lite"})
+        assert chatbot._call_gemini("s", "q") == '{"ok": 1}'
+        assert [m for m, _ in fm.configs] == ["lite", "lite"]
+        assert fm.configs[1][1].thinking_config is None
+        assert "lite" in chatbot._NO_THINKING_CONFIG
+        chatbot._call_gemini("s", "q")  # next call goes straight to the plain config
+        assert fm.configs[2][1].thinking_config is None and len(fm.configs) == 3
+
+    def test_stream_retries_same_model_without_setting(self, recording):
+        fm = recording({"lite": "answer", "flash": "unused"}, strict={"lite"})
+        assert list(chatbot._stream_gemini("s", "q")) == ["answer"]
+        assert [m for m, _ in fm.configs] == ["lite", "lite"]
+
+
+class TestGeminiTimeout:
+    def test_timeout_falls_through_to_next_model(self, chain):
+        class ReadTimeout(Exception):
+            pass
+        fm = chain({"m-lite": ReadTimeout("The read operation timed out"), "m-flash": "ok", "m-last": "x"})
+        assert chatbot._call_gemini("s", "q") == "ok"
+        assert fm.calls == ["m-lite", "m-flash"]
+        assert chatbot._model_cooldown["m-lite"] > chatbot.time.time()
+
+    def test_deadline_exceeded_504_falls_through(self, chain):
+        fm = chain({"m-lite": _ApiErr(504), "m-flash": "ok", "m-last": "x"})
+        assert chatbot._call_gemini("s", "q") == "ok"
+
+    def test_timeout_never_below_google_minimum(self):
+        assert chatbot._GEMINI_TIMEOUT_MS >= 10_000
