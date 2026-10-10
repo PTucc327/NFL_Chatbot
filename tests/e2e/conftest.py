@@ -1,5 +1,6 @@
 """
-Browser (end-to-end) tests: start the real app, drive it in Chromium.
+Browser (end-to-end) tests: start the real app, drive it in Chromium
+(and WebKit, for the iPhone profiles in test_phones.py).
 
 Run with:  RUN_E2E=1 python -m pytest tests/e2e -v
 Needs:     pip install -r requirements-dev.txt && python -m playwright install chromium
@@ -64,13 +65,26 @@ def app_url():
 
 
 @pytest.fixture(scope="session")
-def browser():
+def playwright():
     from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
-        channel = os.getenv("PW_CHANNEL") or None
-        b = p.chromium.launch(channel=channel)
-        yield b
-        b.close()
+        yield p
+
+
+@pytest.fixture(scope="session")
+def browser(playwright):
+    channel = os.getenv("PW_CHANNEL") or None
+    b = playwright.chromium.launch(channel=channel)
+    yield b
+    b.close()
+
+
+@pytest.fixture(scope="session")
+def webkit(playwright):
+    """Safari's engine, for iPhone profiles (python -m playwright install webkit)."""
+    b = playwright.webkit.launch()
+    yield b
+    b.close()
 
 
 class App:

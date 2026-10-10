@@ -777,22 +777,33 @@ with st.sidebar:
     )
 
 # Phones: the sidebar overlays the chat, so close it after a tool is used —
-# otherwise the answer is hidden behind it.
+# otherwise the answer is hidden behind it. "Phone" means narrow OR short:
+# a big phone held sideways is wider than 768px, so Streamlit gives it the
+# desktop layout with the sidebar docked open over a ~360px-tall screen.
+PHONE_JS = "(window.parent.innerWidth < 768 || window.parent.innerHeight < 500)"
+_COLLAPSE_JS = """
+        const doc = window.parent.document;
+        const bar = doc.querySelector('section[data-testid="stSidebar"]');
+        // Only when open: the button toggles, so on a closed sidebar it would open it.
+        if (%s && bar && bar.getAttribute('aria-expanded') === 'true') {
+            const btn = doc.querySelector('[data-testid="stSidebarCollapseButton"] button')
+                     || doc.querySelector('[data-testid="stSidebarCollapseButton"]');
+            if (btn) btn.click();
+        }""" % PHONE_JS
+
+# Sideways phones start with the sidebar closed too (Streamlit's "auto" only
+# looks at width). Once per session, so it never fights a user who reopens it.
+if not st.session_state.get("sidebar_start_checked"):
+    st.session_state["sidebar_start_checked"] = True
+    components.html("<script>" + _COLLAPSE_JS + "</script>", height=0)
+
 if sidebar_prompt:
     # The run counter makes the HTML differ every time: Streamlit reuses an
     # identical components.html frame without re-running its script, so the
     # sidebar only closed after the first tool tap.
     st.session_state["sidebar_close_seq"] = st.session_state.get("sidebar_close_seq", 0) + 1
     components.html(
-        f"<!-- close #{st.session_state['sidebar_close_seq']} -->" +
-        """<script>
-        const doc = window.parent.document;
-        if (window.parent.innerWidth < 768) {
-            const btn = doc.querySelector('[data-testid="stSidebarCollapseButton"] button')
-                     || doc.querySelector('[data-testid="stSidebarCollapseButton"]');
-            if (btn) btn.click();
-        }
-        </script>""",
+        f"<!-- close #{st.session_state['sidebar_close_seq']} --><script>" + _COLLAPSE_JS + "</script>",
         height=0,
     )
 
