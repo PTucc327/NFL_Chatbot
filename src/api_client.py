@@ -518,7 +518,10 @@ def _standings_groups(data: Dict[str, Any]) -> List[Dict[str, Any]]:
 def _standings_table(rows: List[Dict[str, Any]], highlight: Optional[str] = None) -> List[str]:
     out = ["| Team | W-L | Div | Diff | Streak | Seed |", "|---|---|---|---|---|---|"]
     for r in rows:
-        name = f"**{r['name']}**" if highlight and r["name"] == highlight else r["name"]
+        # Nickname ("Chiefs") keeps the table narrow enough for phones; the
+        # division/conference heading already gives the context.
+        short = r["name"].split()[-1] if r["name"] else r["name"]
+        name = f"**{short}**" if highlight and r["name"] == highlight else short
         clinch = f" ({r['clinch']})" if r["clinch"] else ""
         out.append(f"| {name}{clinch} | {r['record']} | {r['div'] or '-'} | {r['diff'] or '-'} | "
                    f"{r['streak'] or '-'} | {r['seed'] or '-'} |")
@@ -554,8 +557,10 @@ def get_standings(team_query: Optional[str] = None, division: Optional[str] = No
             seed_line = ""
             if row["seed"]:
                 status = "in playoff position" if row["seed"] <= 7 else "outside the playoff spots"
-                seed_line = f"\n{row['name']} are the **#{row['seed']} seed** in the {g['conf']} ({status})."
-            return "\n".join([f"📊 **{title} Standings**", ""]
+                # Blank line first: directly after a Markdown table, the
+                # sentence would render as an extra (very wide) table row.
+                seed_line = f"\n\n{row['name']} are the **#{row['seed']} seed** in the {g['conf']} ({status})."
+            return "\n".join([f"📊 **{title} Standings** — {row['name']}", ""]
                              + _standings_table(g["rows"], highlight=row["name"])) + seed_line
         return f"I couldn't find the standings for '{team_query}'."
 

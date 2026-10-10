@@ -1072,14 +1072,15 @@ class TestDivisionStandings:
     def test_division_table_sorted_by_record(self):
         out = _client_mod.get_standings(division="NFC East")
         assert "NFC East Standings" in out
-        assert out.index("New York Giants") < out.index("Philadelphia Eagles")
-        assert "| New York Giants | 3-1 | 1-0 | +5 | W1 | 3 |" in out
+        assert out.index("| Giants") < out.index("| Eagles")
+        assert "| Giants | 3-1 | 1-0 | +5 | W1 | 3 |" in out
 
     def test_team_shows_division_and_seed(self):
         with patch.object(_client_mod, "find_team", return_value={"displayName": "Baltimore Ravens"}):
             out = _client_mod.get_standings("Ravens")
         assert "AFC North Standings" in out
-        assert "**Baltimore Ravens**" in out  # highlighted
+        assert "| **Ravens** |" in out  # highlighted
+        assert "Standings** — Baltimore Ravens" in out  # full name in the heading
         assert "#5 seed** in the AFC (in playoff position)" in out
 
     def test_team_outside_playoffs(self):
@@ -1387,3 +1388,12 @@ class TestRosteredPreference:
         }
         out = _client_mod.get_player_profile_smart("justin jefferson")
         assert isinstance(out, dict) and len(out["matches"]) == 2
+
+
+def test_seed_sentence_is_not_part_of_the_table():
+    """A sentence directly after a Markdown table renders as an extra row."""
+    with patch.object(_client_mod, "fetch_json", return_value=LEVEL3_STANDINGS), \
+         patch.object(_client_mod, "find_team", return_value={"displayName": "Baltimore Ravens"}):
+        out = _client_mod.get_standings("Ravens")
+    table_end = out.rindex("|")
+    assert out[table_end:].startswith("|\n\nBaltimore Ravens are the")

@@ -288,6 +288,12 @@ st.markdown("""
     section[data-testid="stSidebar"] [data-testid="stExpander"] summary p {
         font-weight: 600; font-size: 14.5px; color: #e6edf5;
     }
+    /* Sidebar open/close toggles: 44px tap targets (were 28px) */
+    [data-testid="stSidebarCollapseButton"] button,
+    [data-testid="stExpandSidebarButton"] {
+        min-width: 44px !important; min-height: 44px !important;
+    }
+
     /* Less inner padding so two-wide button grids keep one-line labels */
     section[data-testid="stSidebar"] [data-testid="stExpanderDetails"] {
         padding: 0.25rem 0.5rem 0.75rem 0.5rem;
@@ -344,6 +350,13 @@ st.markdown("""
 
         /* Clear the sidebar toggle, which floats over the top-left corner */
         [data-testid="stMainBlockContainer"], .block-container { padding-top: 3.25rem; }
+    }
+
+    /* ── Phones: compact tables in answers (box scores, standings) ── */
+    @media (max-width: 640px) {
+        div[data-testid="stChatMessage"] table { font-size: 12.5px; }
+        div[data-testid="stChatMessage"] th,
+        div[data-testid="stChatMessage"] td { padding: 4px 6px !important; white-space: nowrap; }
     }
 
     /* ── Mobile breakpoint (≤ 480px) ───────────────────────────── */
@@ -762,7 +775,12 @@ with st.sidebar:
 # Phones: the sidebar overlays the chat, so close it after a tool is used —
 # otherwise the answer is hidden behind it.
 if sidebar_prompt:
+    # The run counter makes the HTML differ every time: Streamlit reuses an
+    # identical components.html frame without re-running its script, so the
+    # sidebar only closed after the first tool tap.
+    st.session_state["sidebar_close_seq"] = st.session_state.get("sidebar_close_seq", 0) + 1
     components.html(
+        f"<!-- close #{st.session_state['sidebar_close_seq']} -->" +
         """<script>
         const doc = window.parent.document;
         if (window.parent.innerWidth < 768) {
