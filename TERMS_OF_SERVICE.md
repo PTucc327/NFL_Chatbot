@@ -13,6 +13,8 @@ NFL Pro-Bot is a free, AI-powered chatbot that answers NFL-related questions usi
 
 It is an **independent fan tool**. It is not affiliated with, endorsed by, or sponsored by the NFL, any NFL team, ESPN, Sleeper, or Google.
 
+**You must be 18 or older to use the App.** It is built on Google's Gemini API, whose terms do not allow use by people under 18. By using the App you confirm that you are 18 or older.
+
 ---
 
 ## 2. No warranty on accuracy

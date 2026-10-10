@@ -278,10 +278,13 @@ NFL_Chatbot/
 
 ## Legal & privacy
 
+- **For adults 18+.** Google's Gemini API terms don't allow use by under-18s,
+  so visitors confirm their age on the consent screen.
 - No accounts, and nothing is stored server-side. Chat history lives only in
   your browser tab.
 - Questions are processed by Google Gemini. On the free tier, Google may use
-  them to improve its products, so please don't include personal information.
+  them to improve its products and human reviewers may read them, so please don't
+  include personal information.
 - Responses are AI-generated and may be inaccurate. **Not for use in sports betting.**
 - Data comes from ESPN, Sleeper and public RSS feeds. Team names and marks belong
   to the NFL and its teams. This is an independent fan project, not affiliated

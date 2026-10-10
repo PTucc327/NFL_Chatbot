@@ -39,7 +39,7 @@ The App makes outbound requests to these services on your behalf to answer your 
 | **Sleeper API** | Player profiles, injury status, fantasy stats | [Sleeper Privacy Policy](https://sleeper.com/privacy) |
 | **RSS feeds** (Yahoo Sports, NBC Sports PFT, Google News) | NFL news headlines | Subject to each publisher's policy |
 
-Your query text is sent to Google Gemini to extract intent and generate responses. Google's data handling is governed by the [Gemini API terms](https://ai.google.dev/gemini-api/terms). If the App is running on Gemini's free tier, Google may use submitted queries to improve its products — please don't include personal information in your questions. We do not send your queries to ESPN or Sleeper — only structured API calls are made.
+Your query text is sent to Google Gemini to extract intent and generate responses. Google's data handling is governed by the [Gemini API terms](https://ai.google.dev/gemini-api/terms). If the App is running on Gemini's free tier, Google may use submitted questions and generated answers to improve its products, and **human reviewers at Google may read them** — please don't include personal information in your questions. We do not send your queries to ESPN or Sleeper — only structured API calls are made.
 
 ---
 
@@ -51,7 +51,7 @@ Because we store nothing server-side, there is nothing to retain or delete. Your
 
 ## 5. Children's privacy
 
-This App is intended for general audiences. It does not knowingly collect information from children under 13. If you believe a child has provided personal information through this App, please contact us so we can address it.
+This App is for adults aged 18 and older (a requirement of the Gemini API terms) and is not directed at children; users confirm their age before using it. It does not knowingly collect information from anyone under 18. If you believe a minor has used the App or provided personal information through it, please contact us so we can address it.
 
 ---
 

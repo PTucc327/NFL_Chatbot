@@ -92,6 +92,8 @@ class App:
         raise TimeoutError("app still running")
 
     def accept_consent(self):
+        self.page.get_by_text("I confirm I'm 18 or older").click(timeout=60_000)
+        self.wait_idle()
         self.page.get_by_role("button", name=re.compile("I agree")).click(timeout=60_000)
         self.wait_idle()
 

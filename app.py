@@ -368,10 +368,13 @@ if not st.session_state["terms_accepted"]:
                     font-size:13px; color:#8ea0b5; margin-bottom:20px;
                     line-height:1.6;">
             <strong style="color:#c8d6e5;">Before you continue:</strong><br>
+            • <strong style="color:#c8d6e5;">You must be 18 or older</strong> to use this App
+              (required by Google's Gemini API terms).<br>
             • Responses are AI-generated and may be inaccurate or delayed.<br>
             • Do not use this App for sports betting or high-stakes fantasy decisions.<br>
             • No account needed. Your chat lives only in this browser tab.<br>
-            • Questions are answered with Google Gemini (see the Privacy Policy).<br>
+            • Questions are answered with Google Gemini; on its free tier Google may
+              use and human-review them, so don't include personal information.<br>
             • Data is sourced from ESPN, Sleeper, and public RSS feeds.
         </div>
     </div>
@@ -384,11 +387,11 @@ if not st.session_state["terms_accepted"]:
     _tos_url  = f"{_repo}/blob/main/TERMS_OF_SERVICE.md"  if _repo else ""
     _priv_url = f"{_repo}/blob/main/PRIVACY_POLICY.md"    if _repo else ""
     _legal_links = (
-        f"By continuing you agree to the "
+        f"By continuing you confirm you're 18 or older and agree to the "
         f"<a href='{_tos_url}' target='_blank' style='color:#4f8ff0;'>Terms of Service</a> and "
         f"<a href='{_priv_url}' target='_blank' style='color:#4f8ff0;'>Privacy Policy</a>."
         if _repo else
-        "By continuing you agree to the Terms of Service and Privacy Policy."
+        "By continuing you confirm you're 18 or older and agree to the Terms of Service and Privacy Policy."
     )
 
     _, col, _ = st.columns([2, 3, 2])
@@ -406,7 +409,11 @@ if not st.session_state["terms_accepted"]:
             f"{_legal_links}</p>",
             unsafe_allow_html=True,
         )
-        if st.button("✅ I agree — let's go", use_container_width=True, type="primary"):
+        # Gemini API terms: no use by, or apps likely to be accessed by, under-18s.
+        age_ok = st.checkbox("I confirm I'm 18 or older", key="age_confirmed")
+        if st.button("✅ I agree — let's go", use_container_width=True, type="primary",
+                     disabled=not age_ok,
+                     help=None if age_ok else "Please confirm you're 18 or older first"):
             st.session_state["terms_accepted"] = True
             st.rerun()
     st.stop()  # Render nothing else until accepted

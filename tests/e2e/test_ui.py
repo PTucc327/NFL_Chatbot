@@ -21,6 +21,17 @@ def test_consent_then_home_screen(app):
     assert not app.errors
 
 
+def test_agree_requires_age_confirmation(app):
+    """Gemini API terms: under-18s may not use apps built on it."""
+    app.page.get_by_text("Welcome to NFL Pro-Bot").wait_for(timeout=60_000)
+    agree = app.page.get_by_role("button", name=re.compile("I agree"))
+    assert agree.is_disabled()
+    assert app.page.get_by_text("You must be 18 or older").count() == 1
+    app.page.get_by_text("I confirm I'm 18 or older").click()
+    app.wait_idle()
+    assert agree.is_enabled()
+
+
 def test_sidebar_open_on_desktop(app):
     app.accept_consent()
     assert app.page.locator('[data-testid="stSidebarUserContent"]').is_visible()
