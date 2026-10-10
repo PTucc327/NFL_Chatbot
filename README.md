@@ -1,6 +1,6 @@
 # 🏈 Sideline
 
-[![Live app](https://img.shields.io/badge/live%20app-sideline.streamlit.app-ff4b4b?logo=streamlit&logoColor=white)](https://sideline.streamlit.app/)
+![Deployed: private demo](https://img.shields.io/badge/deployed-private%20demo-ff4b4b?logo=streamlit&logoColor=white)
 [![CI](https://github.com/PTucc327/NFL_Chatbot/actions/workflows/ci.yml/badge.svg)](https://github.com/PTucc327/NFL_Chatbot/actions/workflows/ci.yml)
 ![Python 3.12](https://img.shields.io/badge/python-3.12-3776ab?logo=python&logoColor=white)
 
@@ -11,7 +11,10 @@
 > An AI assistant for NFL fans that answers in plain English from **live data**: scores,
 > schedules, standings, box scores, injuries, team rankings and fantasy advice.
 
-### **[Try it live → sideline.streamlit.app](https://sideline.streamlit.app/)**
+**Live demo:** deployed on Streamlit Community Cloud as a private app.
+[Message me on LinkedIn](https://www.linkedin.com/in/paul-tuccinardi/) for access,
+or [run it locally](#run-it-locally) with a free Gemini key. The screenshots below
+are from the deployed app.
 
 ![Sideline home screen](docs/screenshots/home.png)
 
@@ -253,7 +256,7 @@ NFL_Chatbot/
 │   ├── test_*.py             # Unit tests (267)
 │   └── e2e/                  # Playwright browser tests (13)
 ├── evals/                    # Answer-quality evals: 27 real questions + checks
-├── docs/screenshots/         # README images, captured from the live app
+├── docs/screenshots/         # README images, captured from the deployed app
 ├── .github/workflows/        # ci.yml (4 jobs) · refresh_data.yml (weekly)
 ├── .streamlit/config.toml    # Dark theme, headless server
 ├── requirements.txt          # Production dependencies (what the cloud installs)
