@@ -68,7 +68,8 @@ logger = logging.getLogger(__name__)
 # (per Google Cloud project), so falling through a chain adds their daily
 # capacity together. Measured on the free tier (first-token latency):
 # 3.5-flash-lite ~0.6s with a generous quota; 2.5-flash ~0.4s but ~20
-# requests/day; 3.5-flash 8-14s and only ~2 requests/minute — so it is a
+# requests/day; 3.5-flash was 8-14s and ~2 requests/minute, and Google now
+# routes it to 3.6-flash (Oct 2026), which is requested directly — so it is a
 # backup, not the default. The lite model once emitted a stray non-English
 # word; _strip_foreign_script filters that. Override with
 # GEMINI_EXTRACT_MODELS / GEMINI_FORMAT_MODELS, or GEMINI_MODELS for both.
@@ -78,11 +79,11 @@ def _model_list(env: str, default: tuple) -> list:
 
 
 GEMINI_EXTRACT_MODELS = _model_list("GEMINI_EXTRACT_MODELS", (
-    "gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-3.5-flash",
+    "gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-3.6-flash",
     "gemini-3.1-flash-lite",   # slowest in testing (~7-16s); last resort
 ))
 GEMINI_FORMAT_MODELS = _model_list("GEMINI_FORMAT_MODELS", (
-    "gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-3.5-flash",
+    "gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-3.6-flash",
     "gemini-3.1-flash-lite",
 ))
 # Every model in use, for app-wide checks ("is anything still available?").

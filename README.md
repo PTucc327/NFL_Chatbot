@@ -87,7 +87,7 @@ flowchart LR
 ## Engineering highlights
 
 **Runs on the free Gemini tier**
-- Model chains (`gemini-3.5-flash-lite` → `2.5-flash` → `3.5-flash` → `3.1-flash-lite`)
+- Model chains (`gemini-3.5-flash-lite` → `2.5-flash` → `3.6-flash` → `3.1-flash-lite`)
   fall through on quota limits, retired models, server errors or a 20s
   deadline. Each model has its own quota, so daily capacity adds up.
 - Per-model cooldowns: a spent daily quota pauses that model until midnight
@@ -133,7 +133,7 @@ by reintroducing those bugs and confirming the tests fail.
 | Layer | Technology |
 |---|---|
 | UI | Streamlit 1.54 (Community Cloud) |
-| LLM | Google Gemini via `google-genai` 2.7: 3.5 Flash-Lite, 2.5 Flash, 3.5 Flash |
+| LLM | Google Gemini via `google-genai` 2.7: 3.5 Flash-Lite, 2.5 Flash, 3.6 Flash |
 | Data | ESPN site API · Sleeper API · RSS (Google News, Yahoo Sports, ProFootballTalk) |
 | Matching | `rapidfuzz` |
 | Charts | Streamlit charts (pandas) |
