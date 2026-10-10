@@ -1,4 +1,4 @@
-# 🏈 NFL Pro-Bot
+# 🏈 Sideline
 
 [![Live app](https://img.shields.io/badge/live%20app-nflchatbot.streamlit.app-ff4b4b?logo=streamlit&logoColor=white)](https://nflchatbot.streamlit.app/)
 [![CI](https://github.com/PTucc327/NFL_Chatbot/actions/workflows/ci.yml/badge.svg)](https://github.com/PTucc327/NFL_Chatbot/actions/workflows/ci.yml)
@@ -8,19 +8,19 @@
 [LinkedIn](https://www.linkedin.com/in/paul-tuccinardi/) ·
 [GitHub](https://github.com/PTucc327)
 
-> An NFL assistant that answers in plain English from **live data**: scores,
+> An AI assistant for NFL fans that answers in plain English from **live data**: scores,
 > schedules, standings, box scores, injuries, team rankings and fantasy advice.
 
 ### **[Try it live → nflchatbot.streamlit.app](https://nflchatbot.streamlit.app/)**
 
-![NFL Pro-Bot home screen](docs/screenshots/home.png)
+![Sideline home screen](docs/screenshots/home.png)
 
 ---
 
 ## Why it's different
 
 General-purpose chatbots answer sports questions from training data that is
-months out of date. NFL Pro-Bot fetches the current data first (ESPN, Sleeper,
+months out of date. Sideline fetches the current data first (ESPN, Sleeper,
 news feeds) and only then has an LLM write the answer, under the rule that
 current-season facts come **only** from that data. The result reads like an
 analyst and is grounded in this week's numbers.
@@ -286,9 +286,12 @@ NFL_Chatbot/
   them to improve its products and human reviewers may read them, so please don't
   include personal information.
 - Responses are AI-generated and may be inaccurate. **Not for use in sports betting.**
-- Data comes from ESPN, Sleeper and public RSS feeds. Team names and marks belong
-  to the NFL and its teams. This is an independent fan project, not affiliated
-  with the NFL, ESPN or Sleeper.
+- Data comes from ESPN, Sleeper and public RSS feeds. "NFL" and team names and marks
+  belong to the NFL and its teams; the app shows no team logos, only names and
+  abbreviations. This is an independent, non-commercial fan project, not affiliated
+  with the NFL, its teams, ESPN, Sleeper or Google.
+- Voice input uses the browser's speech recognition (Chrome/Edge send audio to
+  Google/Microsoft to transcribe); the app only receives the text.
 - See [PRIVACY_POLICY.md](PRIVACY_POLICY.md) and [TERMS_OF_SERVICE.md](TERMS_OF_SERVICE.md).
 
 ---

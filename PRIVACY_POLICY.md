@@ -1,19 +1,19 @@
 # Privacy Policy
 
-**NFL Pro-Bot** ("the App", "we", "us")  
+**Sideline** ("the App", "we", "us")  
 Last updated: October 2026
 
 ---
 
 ## 1. Who we are
 
-NFL Pro-Bot is a free, AI-powered NFL information assistant built with Streamlit and Google Gemini. It is an independent fan tool and is not affiliated with the NFL, ESPN, Sleeper, or any professional sports organisation.
+Sideline is a free, AI-powered assistant for NFL fans built with Streamlit and Google Gemini. It is an independent fan tool and is not affiliated with the NFL, ESPN, Sleeper, or any professional sports organisation.
 
 ---
 
 ## 2. What data we collect
 
-**We do not collect, store, or transmit any personally identifiable information (PII).**
+**We do not collect or store personal information.** To answer your questions, their text is sent to Google Gemini (see section 3) — so please don't type personal information into the chat.
 
 Specifically:
 
@@ -24,6 +24,7 @@ Specifically:
 | Location | ❌ No | |
 | Conversation history | ❌ No | Chat exists only in your browser session and is deleted when you close the tab |
 | Cookies | ❌ No | Streamlit may use a technical session cookie scoped to your browser tab; no tracking cookies are set |
+| Voice input (optional) | ⚠️ Browser only | "Ask by voice" uses your browser's built-in speech recognition. In Chrome and Edge, the browser sends your audio to Google's or Microsoft's speech service to turn it into text; the App only receives the text. |
 | Favourite team / player preference | ⚠️ Session only | Kept in your browser session and cleared when you close the tab. (If you run the App yourself with `ENABLE_LOCAL_PREFS=1`, it is saved to `~/.nfl_chatbot_prefs.json` on the machine running the App.) |
 
 ---

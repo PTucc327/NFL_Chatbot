@@ -12,10 +12,10 @@ from zoneinfo import ZoneInfo
 # ─── First visit ──────────────────────────────────────────────────
 
 def test_consent_then_home_screen(app):
-    app.page.get_by_text("Welcome to NFL Pro-Bot").wait_for(timeout=60_000)  # cold start
+    app.page.get_by_text("Welcome to Sideline").wait_for(timeout=60_000)  # cold start
     app.accept_consent()
     assert app.page.get_by_role("button", name="Skip").count() == 0  # one welcome step
-    assert app.page.get_by_text("NFL Pro-Bot", exact=True).count() >= 1
+    assert app.page.get_by_text("Sideline", exact=True).count() >= 1
     examples = app.page.get_by_role("button", name=re.compile("What's the playoff picture"))
     assert examples.count() == 1
     assert not app.errors
@@ -23,7 +23,7 @@ def test_consent_then_home_screen(app):
 
 def test_agree_requires_age_confirmation(app):
     """Gemini API terms: under-18s may not use apps built on it."""
-    app.page.get_by_text("Welcome to NFL Pro-Bot").wait_for(timeout=60_000)
+    app.page.get_by_text("Welcome to Sideline").wait_for(timeout=60_000)
     agree = app.page.get_by_role("button", name=re.compile("I agree"))
     assert agree.is_disabled()
     assert app.page.get_by_text("You must be 18 or older").count() == 1
@@ -100,7 +100,12 @@ def test_typed_question_and_player_selection(app):
     select = app.page.get_by_role("button", name=re.compile(r"Select Justin Jefferson \(MIN\)"))
     if select.count():  # two active players share the name — pick the Vikings WR
         select.first.click()
-        app.wait_idle()
+        # The click causes two reruns (queue the choice, then answer it); a
+        # single idle wait can land between them, so wait for the answer.
+        for _ in range(60):
+            app.wait_idle(timeout=30)
+            if "MIN" in app.last_answer():
+                break
         assert app.page.get_by_role("button", name=re.compile("Select Justin Jefferson")).count() == 0
     answer = app.last_answer()
     assert "Justin Jefferson" in answer and "MIN" in answer

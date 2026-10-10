@@ -251,11 +251,11 @@ FALLBACK_NOTICE = "_The AI assistant is busy, so here's the raw data I found:_\n
 CUT_OFF_NOTICE = "\n\n_(The response was cut off — please try again.)_"
 
 BUSY_MESSAGE = (
-    "⚠️ NFL Pro-Bot is getting more questions than it can answer right now. "
+    "⚠️ Sideline is getting more questions than it can answer right now. "
     "Please try again in about a minute."
 )
 DAILY_LIMIT_MESSAGE = (
-    "⚠️ NFL Pro-Bot has used up its free AI quota for today. It resets at "
+    "⚠️ Sideline has used up its free AI quota for today. It resets at "
     "midnight Pacific time — please come back then!"
 )
 
@@ -933,7 +933,7 @@ def _dispatch(parsed: Dict[str, Any]) -> tuple[Dict[str, Any], Optional[Dict[str
 # -------------------------------------------------------
 
 _FORMATTING_SYSTEM = """
-You are NFL Pro-Bot, a knowledgeable and conversational NFL assistant.
+You are Sideline, a knowledgeable and conversational assistant for NFL fans.
 Your job is to turn raw data into a natural, engaging response.
 
 Guidelines:

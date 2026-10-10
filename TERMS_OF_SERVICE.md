@@ -1,6 +1,6 @@
 # Terms of Service
 
-**NFL Pro-Bot**  
+**Sideline**  
 Last updated: August 2026
 
 Please read these terms before using the App. By clicking "I agree" or continuing to use the App, you accept these terms.
@@ -9,7 +9,7 @@ Please read these terms before using the App. By clicking "I agree" or continuin
 
 ## 1. What this App is
 
-NFL Pro-Bot is a free, AI-powered chatbot that answers NFL-related questions using publicly available data (ESPN, Sleeper, RSS news feeds) and Google's Gemini language model.
+Sideline is a free, non-commercial, AI-powered chatbot that answers questions about NFL football using publicly available data (ESPN, Sleeper, RSS news feeds) and Google's Gemini language model.
 
 It is an **independent fan tool**. It is not affiliated with, endorsed by, or sponsored by the NFL, any NFL team, ESPN, Sleeper, or Google.
 
@@ -54,13 +54,13 @@ Data displayed by this App comes from:
 - **Sleeper** — player profiles, injury data, fantasy stats (© Sleeper)
 - **Yahoo Sports / NBC Sports PFT / Google News** — headlines (© respective publishers)
 
-All team names, logos, and related marks are the property of the NFL and its member clubs. This App does not claim ownership of any such marks.
+"NFL", team names, logos, and related marks are the property of the NFL and its member clubs. The App does not display team logos; team names and abbreviations are used only to identify teams. The App does not claim ownership of, or any license to, these marks.
 
 ---
 
 ## 6. Intellectual property
 
-The App's source code is open source (see the project's license file). The underlying AI model is Google Gemini (© Google). The static data files (legends.json, prospects.json) were compiled by the App's author and are provided for informational use only.
+The App's source code is published on GitHub for viewing. Unless a license file in the repository says otherwise, all rights are reserved by the author. The underlying AI model is Google Gemini (© Google). The static data files (legends.json, prospects.json) were compiled by the App's author and are provided for informational use only.
 
 ---
 

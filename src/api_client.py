@@ -285,7 +285,7 @@ def _fetch_rss_thread(url: str) -> List[Dict[str, str]]:
     the text to feedparser so it never makes a network call of its own.
     """
     try:
-        resp = requests.get(url, timeout=8, headers={"User-Agent": "NFL-Pro-Bot/1.0"})
+        resp = requests.get(url, timeout=8, headers={"User-Agent": "Sideline-FanProject/1.0 (+https://github.com/PTucc327/NFL_Chatbot)"})
         resp.raise_for_status()
         feed = feedparser.parse(resp.text)
         return [{"title": e.title, "link": e.link, "desc": e.get("summary", "")} for e in feed.entries]

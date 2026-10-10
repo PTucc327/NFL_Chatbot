@@ -126,7 +126,7 @@ def _sanitize_player(raw: str) -> str:
 # Page Configuration
 # ------------------------------------------------------------------
 st.set_page_config(
-    page_title="NFL Pro-Bot",
+    page_title="Sideline · Football Assistant",
     page_icon="🏈",
     layout="wide",
     initial_sidebar_state="auto",  # open on desktop, collapsed on phones
@@ -270,7 +270,12 @@ st.markdown("""
         background: #131c28; border: 1px solid #24344a; border-radius: 10px;
         padding: 10px 12px; margin: 4px 0 10px 0;
     }
-    .team-card img { width: 44px; height: 44px; object-fit: contain; flex: none; }
+    .team-badge {
+        display: inline-flex; align-items: center; justify-content: center; flex: none;
+        border-radius: 50%; background: #1c2b3f; border: 1px solid #2f4a6b;
+        color: #dbe4ee; font-weight: 700; letter-spacing: 0.5px;
+    }
+    .badge-row { display: flex; justify-content: center; margin-bottom: 6px; }
     .team-card .tc-name { font-weight: 600; color: #f0f4f8; font-size: 14.5px; line-height: 1.25; }
     .team-card .tc-meta { color: #93a3b8; font-size: 12.5px; margin-top: 2px; }
 
@@ -359,7 +364,7 @@ if not st.session_state["terms_accepted"]:
                 border:1px solid #26374d; border-radius:14px; padding:32px 36px;">
         <div style="font-size:32px; text-align:center; margin-bottom:12px;">🏈</div>
         <h2 style="text-align:center; color:#f4f6f8; margin:0 0 6px 0;
-                   font-size:20px;">Welcome to NFL Pro-Bot</h2>
+                   font-size:20px;">Welcome to Sideline</h2>
         <p style="text-align:center; color:#8ea0b5; font-size:13.5px;
                   margin:0 0 24px 0;">
             AI-powered NFL data — live scores, injuries, fantasy stats, and more.
@@ -375,6 +380,7 @@ if not st.session_state["terms_accepted"]:
             • No account needed. Your chat lives only in this browser tab.<br>
             • Questions are answered with Google Gemini; on its free tier Google may
               use and human-review them, so don't include personal information.<br>
+            • Independent fan project — not affiliated with the NFL, its teams, ESPN or Sleeper.<br>
             • Data is sourced from ESPN, Sleeper, and public RSS feeds.
         </div>
     </div>
@@ -482,9 +488,18 @@ def _team_meta(name_or_abbr: str) -> dict:
     key = name_or_abbr or ""
     return _TEAM_LOOKUP.get(key) or _ABBR_LOOKUP.get(key.upper()) or {}
 
-def team_logo_url(name_or_abbr: str) -> str:
-    abbr = _team_meta(name_or_abbr).get("abbr", "")
-    return f"https://a.espncdn.com/i/teamlogos/nfl/500/{abbr}.png" if abbr else ""
+def team_badge(name_or_abbr: str, size: int = 44) -> str:
+    """
+    Text badge with the team's abbreviation ("KC"). Used instead of team
+    logos: logos are the teams' trademarks and were loaded from ESPN's image
+    servers. Abbreviations simply identify the team.
+    """
+    meta = _team_meta(name_or_abbr)
+    abbr = (meta.get("abbr") or name_or_abbr or "FA")[:3].upper()
+    label = html.escape(meta.get("displayName") or name_or_abbr or "Free agent")
+    return (f'<span class="team-badge" role="img" aria-label="{label}" '
+            f'style="width:{size}px;height:{size}px;font-size:{max(11, size // 3)}px">'
+            f'{html.escape(abbr)}</span>')
 
 # ------------------------------------------------------------------
 # Sidebar: One-Click Quick Actions
@@ -548,8 +563,7 @@ with st.sidebar:
             details = " · ".join(x for x in (
                 rec.get("record"), rec.get("division"),
                 f"#{rec['seed']} seed" if rec.get("seed") else None) if x)
-            logo = team_logo_url(team_choice)
-            logo_html = (f'<img src="{logo}" alt="{html.escape(team_choice)} logo">' if logo else "")
+            logo_html = team_badge(team_choice)
             st.markdown(
                 f'<div class="team-card">{logo_html}<div>'
                 f'<div class="tc-name">{html.escape(team_choice)}</div>'
@@ -659,8 +673,7 @@ with st.sidebar:
     with tab_me:
         if fav_team or fav_player:
             if fav_team:
-                flog = team_logo_url(fav_team)
-                img = f'<img src="{flog}" alt="{html.escape(fav_team)} logo">' if flog else ""
+                img = team_badge(fav_team)
                 sub = f"⭐ {html.escape(fav_player)}" if fav_player else "Favorite team"
                 st.markdown(f'<div class="team-card">{img}<div><div class="tc-name">'
                             f'{html.escape(fav_team)}</div><div class="tc-meta">{sub}</div></div></div>',
@@ -722,14 +735,14 @@ with st.sidebar:
     if _has_msgs:
         _export_lines = []
         for _m in st.session_state.messages:
-            _role = "You" if _m["role"] == "user" else "NFL Pro-Bot"
+            _role = "You" if _m["role"] == "user" else "Sideline"
             _ts   = _m.get("time", "")
             _prefix = f"[{_ts}] {_role}:" if _ts else f"{_role}:"
             _export_lines.append(f"{_prefix}\n{_m['content']}\n")
         ec1.download_button(
             label="📥 Export",
             data="\n".join(_export_lines),
-            file_name=f"nfl-probot-chat-{datetime.date.today()}.txt",
+            file_name=f"sideline-chat-{datetime.date.today()}.txt",
             mime="text/plain",
             use_container_width=True,
         )
@@ -765,7 +778,7 @@ st.markdown("""
 <div class="hero">
     <div class="badge">🏈</div>
     <div>
-        <h1>NFL Pro-Bot</h1>
+        <h1>Sideline</h1>
         <p>Scores, schedules, standings, box scores, injuries and fantasy advice — just ask.</p>
         <p class="hero-note">
             ⚠️ AI-generated — verify before acting. Not for betting.
@@ -846,11 +859,7 @@ def _render_pending_selection() -> None:
             safe_name = html.escape(str(p.get("full_name", "Unknown")))
             safe_team = html.escape(str(team_label))
             safe_pos  = html.escape(str(p.get("position", "")))
-            logo = team_logo_url(p.get("team", ""))
-            logo_html = (
-                f'<img src="{logo}" width="40" alt="{safe_team} logo" '
-                f'style="display:block; margin:0 auto 4px auto;">' if logo else ""
-            )
+            logo_html = f'<div class="badge-row">{team_badge(p.get("team") or "", 40)}</div>'
             st.markdown(
                 f'<div class="player-card">{logo_html}'
                 f'<div class="pname">{safe_name}</div>'
@@ -988,14 +997,14 @@ st.markdown("---")
 st.markdown(
     f"""
 <div style="text-align:center; font-size:12px; color:#8492a6; padding:8px 0 16px 0; line-height:2;">
-    NFL Pro-Bot is an independent fan tool — not affiliated with the NFL, ESPN, or Sleeper.<br>
+    Sideline is an independent fan project — not affiliated with the NFL, its teams, ESPN, Sleeper, or Google.<br>
     Responses are AI-generated and may be inaccurate. Not for use in sports betting.<br>
     Data sourced from <strong>ESPN</strong> · <strong>Sleeper</strong> · <strong>Yahoo Sports</strong> · <strong>NBC Sports PFT</strong><br>
     <a href="{_tos_url}" target="_blank" style="color:#4f8ff0; text-decoration:none;">Terms of Service</a>
     &nbsp;·&nbsp;
     <a href="{_priv_url}" target="_blank" style="color:#4f8ff0; text-decoration:none;">Privacy Policy</a>
     &nbsp;·&nbsp;
-    <span style="color:#8492a6;">© 2026 NFL Pro-Bot</span>
+    <span style="color:#8492a6;">© 2026 Sideline</span>
 </div>
 """,
     unsafe_allow_html=True,
