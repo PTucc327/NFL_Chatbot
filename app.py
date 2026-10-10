@@ -758,43 +758,6 @@ with st.sidebar:
         use_container_width=True,
         key="voice_input",
     )
-    ec1, ec2 = st.columns(2)
-    _has_msgs = len(st.session_state.messages) > 0
-    if _has_msgs:
-        _export_lines = []
-        for _m in st.session_state.messages:
-            _role = "You" if _m["role"] == "user" else "Sideline"
-            _ts   = _m.get("time", "")
-            _prefix = f"[{_ts}] {_role}:" if _ts else f"{_role}:"
-            _export_lines.append(f"{_prefix}\n{_m['content']}\n")
-        ec1.download_button(
-            label="📥 Export",
-            data="\n".join(_export_lines),
-            file_name=f"sideline-chat-{datetime.date.today()}.txt",
-            mime="text/plain",
-            use_container_width=True,
-        )
-    else:
-        ec1.button("📥 Export", disabled=True, use_container_width=True,
-                   help="Nothing to export yet — start a conversation first.")
-    if ec2.button("🗑️ Clear", use_container_width=True, disabled=not _has_msgs,
-                  help="Start a new conversation"):
-        st.session_state.messages = []
-        st.session_state["last_mentioned"] = None
-        st.session_state["pending_selection"] = None
-        st.rerun()
-
-    # Legal links and attribution live here, at the bottom of the sidebar,
-    # rather than in the middle of the main page. The header keeps the short
-    # "AI-generated, not for betting" note.
-    _tos_url, _priv_url = _legal_urls()
-    st.markdown(
-        f'<div class="sb-legal">Independent fan project — not affiliated with the NFL, '
-        f'its teams, ESPN, Sleeper or Google. AI answers may be wrong; not for betting.<br>'
-        f'<a href="{_tos_url}" target="_blank">Terms</a> · '
-        f'<a href="{_priv_url}" target="_blank">Privacy</a> · © 2026 Sideline</div>',
-        unsafe_allow_html=True,
-    )
 
 # Phones: the sidebar overlays the chat, so close it after a tool is used —
 # otherwise the answer is hidden behind it.
@@ -1024,3 +987,50 @@ if final_query:
             st.markdown(response)
             st.markdown(f'<div class="msg-time">{reply_time}</div>', unsafe_allow_html=True)
             st.session_state.messages.append({"role": "assistant", "content": response, "time": reply_time})
+
+
+# ------------------------------------------------------------------
+# Sidebar footer: Export / Clear and the legal line. Drawn last, after this
+# run's question and answer were added to the history — drawn earlier, the
+# buttons stayed disabled after the first answer until the next click.
+# Streamlit appends sidebar elements in call order, so this still renders
+# at the bottom of the sidebar, below voice input.
+# ------------------------------------------------------------------
+with st.sidebar:
+    ec1, ec2 = st.columns(2)
+    _has_msgs = len(st.session_state.messages) > 0
+    if _has_msgs:
+        _export_lines = []
+        for _m in st.session_state.messages:
+            _role = "You" if _m["role"] == "user" else "Sideline"
+            _ts   = _m.get("time", "")
+            _prefix = f"[{_ts}] {_role}:" if _ts else f"{_role}:"
+            _export_lines.append(f"{_prefix}\n{_m['content']}\n")
+        ec1.download_button(
+            label="📥 Export",
+            data="\n".join(_export_lines),
+            file_name=f"sideline-chat-{datetime.date.today()}.txt",
+            mime="text/plain",
+            use_container_width=True,
+        )
+    else:
+        ec1.button("📥 Export", disabled=True, use_container_width=True,
+                   help="Nothing to export yet — start a conversation first.")
+    if ec2.button("🗑️ Clear", use_container_width=True, disabled=not _has_msgs,
+                  help="Start a new conversation"):
+        st.session_state.messages = []
+        st.session_state["last_mentioned"] = None
+        st.session_state["pending_selection"] = None
+        st.rerun()
+
+    # Legal links and attribution live here, at the bottom of the sidebar,
+    # rather than in the middle of the main page. The header keeps the short
+    # "AI-generated, not for betting" note.
+    _tos_url, _priv_url = _legal_urls()
+    st.markdown(
+        f'<div class="sb-legal">Independent fan project — not affiliated with the NFL, '
+        f'its teams, ESPN, Sleeper or Google. AI answers may be wrong; not for betting.<br>'
+        f'<a href="{_tos_url}" target="_blank">Terms</a> · '
+        f'<a href="{_priv_url}" target="_blank">Privacy</a> · © 2026 Sideline</div>',
+        unsafe_allow_html=True,
+    )

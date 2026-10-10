@@ -181,3 +181,14 @@ def test_legal_text_in_sidebar_not_mid_page(app):
     assert "not affiliated" in legal.inner_text()
     assert legal.get_by_role("link", name="Terms").count() == 1
     assert legal.get_by_role("link", name="Privacy").count() == 1
+
+
+
+def test_export_and_clear_enable_right_after_first_answer(app):
+    app.accept_consent()
+    export = app.sidebar.get_by_role("button", name=re.compile("Export"))
+    assert export.is_disabled()
+    app.click(re.compile("Who's playing this week"))
+    # No extra click needed: the buttons reflect the new answer immediately.
+    assert app.sidebar.get_by_role("button", name=re.compile("Export")).is_enabled()
+    assert app.sidebar.get_by_role("button", name=re.compile("Clear")).is_enabled()
