@@ -54,6 +54,14 @@ def _save_prefs(prefs: dict) -> None:
     except Exception:
         pass  # non-fatal — profile just won't persist across restarts
 
+def _legal_urls() -> tuple:
+    """Terms / Privacy links on GitHub (REPO_URL), or '#' when unset."""
+    repo = os.getenv("REPO_URL", "")
+    if not repo:
+        return "#", "#"
+    return f"{repo}/blob/main/TERMS_OF_SERVICE.md", f"{repo}/blob/main/PRIVACY_POLICY.md"
+
+
 # ------------------------------------------------------------------
 # Viewer-local time. The server clock is UTC on Streamlit Cloud, so
 # timestamps use the browser's timezone (st.context), falling back to
@@ -248,12 +256,6 @@ st.markdown("""
     [data-testid="stSidebarHeader"] { height: 2.75rem; padding-top: 0.5rem; padding-bottom: 0; }
     [data-testid="stSidebarUserContent"] { padding-top: 0.25rem; }
 
-    /* Tabs: compact, full width */
-    section[data-testid="stSidebar"] [data-baseweb="tab-list"] { gap: 0; }
-    section[data-testid="stSidebar"] button[data-baseweb="tab"] {
-        padding: 6px 2px; flex: 1 1 0; min-width: 0; justify-content: center;
-    }
-    section[data-testid="stSidebar"] button[data-baseweb="tab"] p { font-size: 12.5px; white-space: nowrap; }
 
     /* Keep two-column button grids side by side on phones (Streamlit
        otherwise stacks columns below 640px, doubling the length) */
@@ -279,7 +281,26 @@ st.markdown("""
     .team-card .tc-name { font-weight: 600; color: #f0f4f8; font-size: 14.5px; line-height: 1.25; }
     .team-card .tc-meta { color: #93a3b8; font-size: 12.5px; margin-top: 2px; }
 
-    /* Small section headings inside tabs */
+    /* Sidebar sections (collapsible) */
+    section[data-testid="stSidebar"] [data-testid="stExpander"] details {
+        border: 1px solid #1f2b3a; border-radius: 10px; background: #0f1722;
+    }
+    section[data-testid="stSidebar"] [data-testid="stExpander"] summary p {
+        font-weight: 600; font-size: 14.5px; color: #e6edf5;
+    }
+    /* Less inner padding so two-wide button grids keep one-line labels */
+    section[data-testid="stSidebar"] [data-testid="stExpanderDetails"] {
+        padding: 0.25rem 0.5rem 0.75rem 0.5rem;
+    }
+    section[data-testid="stSidebar"] [data-testid="stExpander"] summary {
+        padding-left: 0.6rem; padding-right: 0.6rem;
+    }
+
+    /* Legal line at the bottom of the sidebar */
+    .sb-legal { font-size: 11.5px; line-height: 1.6; color: #8492a6; margin-top: 10px; }
+    .sb-legal a { color: #6ea8ff; text-decoration: none; }
+
+    /* Small section headings inside sidebar sections */
     .sb-sub { font-size: 12px; font-weight: 600; letter-spacing: 0.4px; color: #93a3b8;
               text-transform: uppercase; margin: 14px 0 6px 0; }
 
@@ -543,7 +564,13 @@ with st.sidebar:
                               disabled=disabled, help=help_text if disabled else None):
                     sidebar_prompt, sidebar_preset = prompt, preset
 
-    tab_team, tab_league, tab_fantasy, tab_me = st.tabs(["🏈 Team", "🌎 League", "🏆 Fantasy", "⭐ Me"])
+    # Collapsible sections instead of tabs: Team is open by default, the rest
+    # fold away below it. (Streamlit doesn't allow nested expanders, so the
+    # sections below use plain containers inside.)
+    tab_team = st.expander("🏈  Team", expanded=True)
+    tab_league = st.expander("🌎  League")
+    tab_fantasy = st.expander("🏆  Fantasy")
+    tab_me = st.expander("⭐  Favorites")
 
     # ── Team ─────────────────────────────────────────────────────
     with tab_team:
@@ -696,7 +723,8 @@ with st.sidebar:
                                + (["player", "injury"] if fav_player else []),
                     "team": fav_team, "player": fav_player,
                 }
-            form_box = st.expander("Edit favorites")
+            st.markdown('<div class="sb-sub">Change favorites</div>', unsafe_allow_html=True)
+            form_box = st.container()
         else:
             st.caption("Save a favorite team and player for one-tap personalized updates.")
             form_box = st.container()
@@ -755,6 +783,18 @@ with st.sidebar:
         st.session_state["last_mentioned"] = None
         st.session_state["pending_selection"] = None
         st.rerun()
+
+    # Legal links and attribution live here, at the bottom of the sidebar,
+    # rather than in the middle of the main page. The header keeps the short
+    # "AI-generated, not for betting" note.
+    _tos_url, _priv_url = _legal_urls()
+    st.markdown(
+        f'<div class="sb-legal">Independent fan project — not affiliated with the NFL, '
+        f'its teams, ESPN, Sleeper or Google. AI answers may be wrong; not for betting.<br>'
+        f'<a href="{_tos_url}" target="_blank">Terms</a> · '
+        f'<a href="{_priv_url}" target="_blank">Privacy</a> · © 2026 Sideline</div>',
+        unsafe_allow_html=True,
+    )
 
 # Phones: the sidebar overlays the chat, so close it after a tool is used —
 # otherwise the answer is hidden behind it.
@@ -984,28 +1024,3 @@ if final_query:
             st.markdown(response)
             st.markdown(f'<div class="msg-time">{reply_time}</div>', unsafe_allow_html=True)
             st.session_state.messages.append({"role": "assistant", "content": response, "time": reply_time})
-
-# ------------------------------------------------------------------
-# Footer — legal links, attribution, AI disclaimer
-# Always rendered below the chat, regardless of conversation state.
-# ------------------------------------------------------------------
-_repo     = os.getenv("REPO_URL", "")
-_tos_url  = f"{_repo}/blob/main/TERMS_OF_SERVICE.md" if _repo else "#"
-_priv_url = f"{_repo}/blob/main/PRIVACY_POLICY.md"   if _repo else "#"
-
-st.markdown("---")
-st.markdown(
-    f"""
-<div style="text-align:center; font-size:12px; color:#8492a6; padding:8px 0 16px 0; line-height:2;">
-    Sideline is an independent fan project — not affiliated with the NFL, its teams, ESPN, Sleeper, or Google.<br>
-    Responses are AI-generated and may be inaccurate. Not for use in sports betting.<br>
-    Data sourced from <strong>ESPN</strong> · <strong>Sleeper</strong> · <strong>Yahoo Sports</strong> · <strong>NBC Sports PFT</strong><br>
-    <a href="{_tos_url}" target="_blank" style="color:#4f8ff0; text-decoration:none;">Terms of Service</a>
-    &nbsp;·&nbsp;
-    <a href="{_priv_url}" target="_blank" style="color:#4f8ff0; text-decoration:none;">Privacy Policy</a>
-    &nbsp;·&nbsp;
-    <span style="color:#8492a6;">© 2026 Sideline</span>
-</div>
-""",
-    unsafe_allow_html=True,
-)

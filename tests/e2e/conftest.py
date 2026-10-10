@@ -116,13 +116,17 @@ class App:
         self.page.locator('[data-testid="stExpandSidebarButton"]').first.click(force=True)
         self.page.locator('[data-testid="stSidebarUserContent"]').wait_for(state="visible")
 
-    def sidebar_tab(self, name: str):
-        self.sidebar.get_by_role("tab", name=re.compile(name)).click()
-        time.sleep(0.6)
+    def sidebar_section(self, name: str):
+        """Open a collapsible sidebar section (Team, League, Fantasy, Favorites)."""
+        details = self.sidebar.locator("details").filter(
+            has=self.page.locator("summary", has_text=name)).first
+        if details.get_attribute("open") is None:
+            details.locator("summary").first.click()
+            time.sleep(0.6)
 
     def choose_team(self, team: str):
         """Pick a team in the sidebar's Team tab (typing filters the list)."""
-        self.sidebar_tab("Team")
+        self.sidebar_section("Team")
         self.sidebar.get_by_role("combobox", name="Team", exact=True).click()
         self.page.keyboard.type(team)
         self.page.keyboard.press("Enter")

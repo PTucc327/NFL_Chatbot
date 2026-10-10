@@ -42,14 +42,15 @@ def test_sidebar_collapsed_on_phone_and_openable(phone):
     content = phone.page.locator('[data-testid="stSidebarUserContent"]')
     assert not content.is_visible()
     phone.open_sidebar()  # regression: hiding the whole header removed this control
-    tabs = [t.strip() for t in phone.sidebar.get_by_role("tab").all_inner_texts()]
-    assert [t.split()[-1] for t in tabs] == ["Team", "League", "Fantasy", "Me"]
+    sections = [t.strip() for t in phone.sidebar.locator("summary").all_inner_texts()]
+    assert [t.split()[-1] for t in sections] == ["Team", "League", "Fantasy", "Favorites"]
+    assert phone.sidebar.get_by_role("tab").count() == 0  # no tab bar
 
 
 def test_phone_sidebar_closes_after_a_tool_and_grid_stays_two_wide(phone):
     phone.accept_consent()
     phone.open_sidebar()
-    phone.sidebar_tab("League")
+    phone.sidebar_section("League")
     tops = phone.page.evaluate("""[...document.querySelectorAll(
         'section[data-testid=stSidebar] div.stButton button')]
         .filter(b => b.offsetParent && /This Week|Playoffs/.test(b.innerText))
@@ -133,7 +134,7 @@ def test_team_card_and_team_stats_button(app):
 
 def test_empty_fantasy_input_explains_itself(app):
     app.accept_consent()
-    app.sidebar_tab("Fantasy")
+    app.sidebar_section("Fantasy")
     before = app.messages().count()
     app.sidebar.get_by_role("button", name=re.compile("Outlook")).click()
     app.page.locator('[data-testid="stToast"]').first.wait_for(timeout=10_000)
@@ -141,15 +142,11 @@ def test_empty_fantasy_input_explains_itself(app):
     assert app.messages().count() == before
 
 
-def test_sidebar_tabs_and_labels_fit(app):
+def test_sidebar_labels_fit(app):
     app.accept_consent()
     app.choose_team("Kansas City")  # enabled buttons
-    tab_overflow = app.page.evaluate("""() => { const t = document.querySelector(
-        'section[data-testid=stSidebar] [data-baseweb=tab-list]');
-        return t.scrollWidth - t.clientWidth; }""")
-    assert tab_overflow <= 1, "all four tabs must fit without scrolling"
-    for tab in ("Team", "League", "Fantasy", "Me"):
-        app.sidebar_tab(tab)
+    for tab in ("Team", "League", "Fantasy", "Favorites"):
+        app.sidebar_section(tab)
         bad = app.page.evaluate("""() => [...document.querySelectorAll(
             'section[data-testid=stSidebar] div.stButton button')]
             .filter(b => b.offsetParent && b.innerText.trim())
@@ -161,15 +158,26 @@ def test_sidebar_tabs_and_labels_fit(app):
 def test_favorite_team_becomes_lookup_team(app):
     app.accept_consent()
     sb = app.sidebar
-    app.sidebar_tab("Me")
+    app.sidebar_section("Favorites")
     sb.get_by_role("combobox", name=re.compile("Favorite team")).click()
     app.page.keyboard.type("Philadelphia")
     app.page.keyboard.press("Enter")
     sb.get_by_role("button", name="Save Profile").click()
     app.wait_idle()
-    app.sidebar_tab("Me")
+    app.sidebar_section("Favorites")
     assert sb.get_by_role("button", name=re.compile("Get My Updates")).is_visible()
-    app.sidebar_tab("Team")
+    app.sidebar_section("Team")
     lookup = sb.locator('[data-testid="stSelectbox"]').first.inner_text().strip()
     assert lookup.startswith("Philadelphia Eagles")
     assert app.page.locator('[data-testid="stException"]').count() == 0
+
+
+
+def test_legal_text_in_sidebar_not_mid_page(app):
+    app.accept_consent()
+    main = app.page.locator('[data-testid="stMainBlockContainer"]').first.inner_text()
+    assert "not affiliated" not in main and "Privacy" not in main
+    legal = app.sidebar.locator(".sb-legal").first
+    assert "not affiliated" in legal.inner_text()
+    assert legal.get_by_role("link", name="Terms").count() == 1
+    assert legal.get_by_role("link", name="Privacy").count() == 1
