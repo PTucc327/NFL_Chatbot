@@ -293,6 +293,10 @@ st.markdown("""
     [data-testid="stExpandSidebarButton"] {
         min-width: 44px !important; min-height: 44px !important;
     }
+    /* The open button floats over the chat; solid so it never blends into bubbles */
+    [data-testid="stExpandSidebarButton"] {
+        background: #131c28 !important; border: 1px solid #24344a !important; border-radius: 10px !important;
+    }
 
     /* Less inner padding so two-wide button grids keep one-line labels */
     section[data-testid="stSidebar"] [data-testid="stExpanderDetails"] {
