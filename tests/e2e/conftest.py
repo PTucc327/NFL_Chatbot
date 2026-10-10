@@ -177,3 +177,18 @@ def open_app(browser, app_url):
     yield make
     for ctx in contexts:
         ctx.close()
+
+
+def pytest_runtest_logreport(report):
+    """
+    On GitHub Actions, also report each failure as a workflow annotation.
+    Annotations are visible without signing in (unlike the job log), so
+    a failing browser test can be diagnosed from the public API/UI.
+    """
+    if not os.getenv("GITHUB_ACTIONS") or not report.failed:
+        return
+    lines = [l.strip() for l in str(report.longrepr).splitlines()]
+    detail = " | ".join(l for l in lines if l.startswith("E "))[:900] or lines[-1][:900]
+    esc = lambda s: s.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    title = esc(report.nodeid).replace(":", "%3A").replace(",", "%2C")
+    print(f"\n::error title={title} ({report.when})::{esc(detail)}", flush=True)
