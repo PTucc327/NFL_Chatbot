@@ -308,7 +308,7 @@ st.markdown("""
     /* Descendant selectors: a button with a tooltip (help=) sits inside an
        extra wrapper, so `div.stButton > button` would miss it */
     section[data-testid="stSidebar"] div.stButton button {
-        padding: 6px 8px;
+        padding: 6px 6px;
         font-size: 13px;
     }
     section[data-testid="stSidebar"] div.stButton button p {
@@ -621,7 +621,7 @@ with st.sidebar:
              {"intents": ["box_score"], "team": _team}),
             ("📊 Standings", f"How are the {_team} looking in the standings?",
              {"intents": ["standings"], "team": _team}),
-            ("📈 Team Stats", f"How do the {_nick} rank on offense and defense?",
+            ("📈 Stats", f"How do the {_nick} rank on offense and defense?",
              {"intents": ["team_stats"], "team": _team}),
             ("📰 News", f"What's the latest news for the {_team}?",
              {"intents": ["news"], "team": _team}),
