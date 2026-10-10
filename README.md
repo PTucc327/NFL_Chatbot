@@ -1,6 +1,6 @@
 # 🏈 Sideline
 
-[![Live app](https://img.shields.io/badge/live%20app-nflchatbot.streamlit.app-ff4b4b?logo=streamlit&logoColor=white)](https://nflchatbot.streamlit.app/)
+[![Live app](https://img.shields.io/badge/live%20app-sideline.streamlit.app-ff4b4b?logo=streamlit&logoColor=white)](https://sideline.streamlit.app/)
 [![CI](https://github.com/PTucc327/NFL_Chatbot/actions/workflows/ci.yml/badge.svg)](https://github.com/PTucc327/NFL_Chatbot/actions/workflows/ci.yml)
 ![Python 3.12](https://img.shields.io/badge/python-3.12-3776ab?logo=python&logoColor=white)
 
@@ -11,7 +11,7 @@
 > An AI assistant for NFL fans that answers in plain English from **live data**: scores,
 > schedules, standings, box scores, injuries, team rankings and fantasy advice.
 
-### **[Try it live → nflchatbot.streamlit.app](https://nflchatbot.streamlit.app/)**
+### **[Try it live → sideline.streamlit.app](https://sideline.streamlit.app/)**
 
 ![Sideline home screen](docs/screenshots/home.png)
 
