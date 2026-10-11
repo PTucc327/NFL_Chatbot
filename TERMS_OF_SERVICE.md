@@ -1,7 +1,7 @@
 # Terms of Service
 
 **Sideline**  
-Last updated: August 2026
+Last updated: October 2026
 
 Please read these terms before using the App. By clicking "I agree" or continuing to use the App, you accept these terms.
 
@@ -14,6 +14,8 @@ Sideline is a free, non-commercial, AI-powered chatbot that answers questions ab
 It is an **independent fan tool**. It is not affiliated with, endorsed by, or sponsored by the NFL, any NFL team, ESPN, Sleeper, or Google.
 
 **You must be 18 or older to use the App.** It is built on Google's Gemini API, whose terms do not allow use by people under 18. By using the App you confirm that you are 18 or older.
+
+**The App is not offered in the European Union/European Economic Area, the United Kingdom or Switzerland.** It runs on the free tier of the Gemini API, whose terms do not allow free-tier apps to be made available to users in those places. By using the App you confirm that you are not located there. Visitors whose device time zone is in one of those regions are shown a notice instead of the App.
 
 ---
 
@@ -72,7 +74,7 @@ To the maximum extent permitted by law, the App's authors are not liable for any
 
 ## 8. Changes to these terms
 
-We may update these terms at any time. The "Last updated" date above will reflect changes. Continued use after an update constitutes acceptance of the revised terms.
+We may update these terms at any time. The "Last updated" date above will reflect changes. Continued use after an update constitutes acceptance of the revised terms. When the terms change materially, the App asks you to agree again.
 
 ---
 

@@ -157,3 +157,39 @@ def trend_indicator(pct: float) -> str:
     if pct >= 0.700: return "🔥" # Upgraded to more visual emojis
     if pct <= 0.350: return "🧊"
     return "•"
+
+# -------------------------------------------------------------------
+# Region restriction
+# -------------------------------------------------------------------
+# Gemini API terms: only Paid Services may be used when making an app
+# available to users in the EEA, Switzerland or the UK. Sideline runs on the
+# free tier, so visitors whose browser time zone is in one of those places
+# are shown a "not available in your region" notice. A good-faith check (a
+# VPN or a changed clock gets past it), backed by the consent checkbox.
+RESTRICTED_TIMEZONES = frozenset({
+    # EU member states (incl. outermost regions that are part of the EU)
+    "Europe/Vienna", "Europe/Brussels", "Europe/Sofia", "Europe/Zagreb",
+    "Asia/Nicosia", "Asia/Famagusta", "Europe/Nicosia", "Europe/Prague",
+    "Europe/Copenhagen", "Europe/Tallinn", "Europe/Helsinki", "Europe/Mariehamn",
+    "Europe/Paris", "Indian/Reunion", "Indian/Mayotte", "America/Martinique",
+    "America/Guadeloupe", "America/Cayenne", "America/Marigot",
+    "Europe/Berlin", "Europe/Busingen", "Europe/Athens", "Europe/Budapest",
+    "Europe/Dublin", "Eire", "Europe/Rome", "Europe/Riga", "Europe/Vilnius",
+    "Europe/Luxembourg", "Europe/Malta", "Europe/Amsterdam", "Europe/Warsaw",
+    "Poland", "Europe/Lisbon", "Portugal", "Atlantic/Madeira", "Atlantic/Azores",
+    "Europe/Bucharest", "Europe/Bratislava", "Europe/Ljubljana", "Europe/Madrid",
+    "Africa/Ceuta", "Atlantic/Canary", "Europe/Stockholm",
+    # Rest of the EEA
+    "Atlantic/Reykjavik", "Iceland", "Europe/Vaduz", "Europe/Oslo",
+    "Arctic/Longyearbyen", "Atlantic/Jan_Mayen",
+    # United Kingdom (and Crown Dependencies, which share its zones)
+    "Europe/London", "Europe/Belfast", "GB", "GB-Eire", "Europe/Guernsey",
+    "Europe/Jersey", "Europe/Isle_of_Man",
+    # Switzerland
+    "Europe/Zurich",
+})
+
+
+def is_restricted_region(timezone_name: Optional[str]) -> bool:
+    """True if a browser time zone (IANA name) is in the EEA, UK or Switzerland."""
+    return bool(timezone_name) and timezone_name in RESTRICTED_TIMEZONES

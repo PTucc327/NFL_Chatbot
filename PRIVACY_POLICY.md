@@ -21,9 +21,9 @@ Specifically:
 |-----------|-----------|-------|
 | Name, email, phone | ❌ No | We have no account or login system |
 | IP address | ❌ Not by the App | The App does not log IP addresses or message text. The hosting provider (e.g. Streamlit Community Cloud) may keep standard server logs under its own privacy policy. |
-| Location | ❌ No | |
+| Location | ❌ No | The App reads your device's time zone (e.g. "America/Chicago") to show times in your local time and to check that you are not in a region where the App isn't offered. It is not stored or logged. |
 | Conversation history | ❌ No | Chat exists only in your browser session and is deleted when you close the tab |
-| Cookies | ❌ No | Streamlit may use a technical session cookie scoped to your browser tab; no tracking cookies are set |
+| Cookies | ⚠️ One, on your device | When you agree to the Terms, the App saves a cookie named `sideline_consent` in your browser so you aren't asked again on every visit. It holds only the version of the Terms you agreed to, expires after 30 days, and never leaves your browser except back to the App. Clear it in your browser settings to be asked again. Streamlit may also use a technical session cookie. No tracking or advertising cookies are set. |
 | Voice input (optional) | ⚠️ Browser only | "Ask by voice" uses your browser's built-in speech recognition. In Chrome and Edge, the browser sends your audio to Google's or Microsoft's speech service to turn it into text; the App only receives the text. |
 | Favourite team / player preference | ⚠️ Session only | Kept in your browser session and cleared when you close the tab. (If you run the App yourself with `ENABLE_LOCAL_PREFS=1`, it is saved to `~/.nfl_chatbot_prefs.json` on the machine running the App.) |
 
@@ -46,7 +46,7 @@ Your query text is sent to Google Gemini to extract intent and generate response
 
 ## 4. Data retention
 
-Because we store nothing server-side, there is nothing to retain or delete. Your session data disappears when you close the browser tab.
+Because we store nothing server-side, there is nothing to retain or delete. Your session data disappears when you close the browser tab. The `sideline_consent` cookie described above stays in your browser until it expires after 30 days or you clear it.
 
 ---
 

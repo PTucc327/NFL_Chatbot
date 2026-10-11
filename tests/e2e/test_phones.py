@@ -73,7 +73,7 @@ def test_phone_flow(device):
     # Consent screen: fits, 18+ box unlocks the agree button.
     page.get_by_text("Welcome to Sideline").wait_for(timeout=90_000)
     _no_overflow(page, "consent")
-    page.get_by_text("I confirm I'm 18 or older").tap()
+    page.get_by_text("I'm 18 or older and not located").tap()
     a.wait_idle()
     agree = page.get_by_role("button", name=re.compile("I agree"))
     assert agree.is_enabled()

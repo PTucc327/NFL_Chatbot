@@ -5,6 +5,7 @@ answers, stale examples, broken Select buttons, server-clock timestamps,
 overflowing sidebar labels, and the phone header under the sidebar toggle.
 """
 import datetime
+import time
 import re
 from zoneinfo import ZoneInfo
 
@@ -27,9 +28,26 @@ def test_agree_requires_age_confirmation(app):
     agree = app.page.get_by_role("button", name=re.compile("I agree"))
     assert agree.is_disabled()
     assert app.page.get_by_text("You must be 18 or older").count() == 1
-    app.page.get_by_text("I confirm I'm 18 or older").click()
+    app.page.get_by_text("I'm 18 or older and not located").click()
     app.wait_idle()
     assert agree.is_enabled()
+
+
+def test_returning_visitor_skips_the_welcome_screen(app):
+    """The agreement is remembered in the browser (30 days), not asked every visit."""
+    app.accept_consent()
+    time.sleep(1.5)  # let the cookie-writing frame run
+    app.page.reload()
+    app.page.locator('[data-testid="stChatInputTextArea"]').wait_for(timeout=60_000)
+    assert app.page.get_by_text("Welcome to Sideline").count() == 0
+
+
+def test_europe_visitor_sees_region_notice(open_app):
+    """Gemini's free tier can't be offered in the EEA, UK or Switzerland."""
+    visitor = open_app(timezone="Europe/Paris")
+    visitor.page.get_by_text("isn't available in your region").wait_for(timeout=60_000)
+    assert visitor.page.get_by_text("Welcome to Sideline").count() == 0
+    assert visitor.page.get_by_role("button", name=re.compile("I agree")).count() == 0
 
 
 def test_sidebar_open_on_desktop(app):

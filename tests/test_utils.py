@@ -17,6 +17,7 @@ is_fuzzy_match     = _utils.is_fuzzy_match
 clean_query        = _utils.clean_query
 parse_iso_datetime = _utils.parse_iso_datetime
 to_et              = _utils.to_et
+is_restricted_region = _utils.is_restricted_region
 
 
 # ─── is_fuzzy_match ───────────────────────────────────────────────
@@ -132,3 +133,29 @@ class TestToEt:
         result = to_et(dt)
         assert "ET" in result
         assert "03:00 PM ET" in result
+
+
+# ─── is_restricted_region ─────────────────────────────────────────
+
+class TestIsRestrictedRegion:
+    """Gemini free tier can't be offered in the EEA, UK or Switzerland."""
+
+    def test_eu_uk_and_swiss_zones_are_restricted(self):
+        for tz in ("Europe/Paris", "Europe/Berlin", "Europe/London", "Europe/Dublin",
+                   "Europe/Zurich", "Europe/Oslo", "Atlantic/Reykjavik", "Atlantic/Canary"):
+            assert is_restricted_region(tz), tz
+
+    def test_other_zones_are_allowed(self):
+        for tz in ("America/New_York", "America/Chicago", "America/Los_Angeles",
+                   "America/Toronto", "Europe/Istanbul", "Europe/Kyiv", "Asia/Tokyo"):
+            assert not is_restricted_region(tz), tz
+
+    def test_unknown_timezone_is_allowed(self):
+        assert not is_restricted_region(None)
+        assert not is_restricted_region("")
+
+    def test_every_listed_zone_is_a_real_iana_name(self):
+        from zoneinfo import ZoneInfo
+        for tz in _utils.RESTRICTED_TIMEZONES:
+            ZoneInfo(tz)  # raises on a typo, which would silently never match
+

@@ -283,8 +283,12 @@ NFL_Chatbot/
 
 - **For adults 18+.** Google's Gemini API terms don't allow use by under-18s,
   so visitors confirm their age on the consent screen.
+- **Not offered in the EU/EEA, UK or Switzerland.** The Gemini free tier can't be
+  used for apps offered there, so visitors confirm their location on the consent
+  screen, and browsers set to a time zone in those regions see a notice instead.
 - No accounts, and nothing is stored server-side. Chat history lives only in
-  your browser tab.
+  your browser tab; a `sideline_consent` cookie remembers the agreement in your
+  browser for 30 days.
 - Questions are processed by Google Gemini. On the free tier, Google may use
   them to improve its products and human reviewers may read them, so please don't
   include personal information.

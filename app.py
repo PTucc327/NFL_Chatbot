@@ -23,6 +23,7 @@ from streamlit_mic_recorder import speech_to_text
 
 from src.chatbot import nfl_chatbot_with_context, ChatbotResponse, QUOTA_ERROR, BUSY_MESSAGE
 from src import api_client
+from src.utils import is_restricted_region
 
 load_dotenv()
 
@@ -393,9 +394,37 @@ if "queued_query" not in st.session_state:
     st.session_state["queued_query"] = None
 
 # ------------------------------------------------------------------
-# Consent Gate — shown once per session before any interaction.
-# Keeps the UI blocked until the user explicitly accepts.
+# Region notice — Gemini's free tier can't be offered in the EEA, UK or
+# Switzerland, so visitors whose browser time zone is there stop here.
 # ------------------------------------------------------------------
+if is_restricted_region(st.context.timezone):
+    st.markdown("""
+    <div style="max-width:560px; margin:80px auto 0 auto; background:#131c28;
+                border:1px solid #26374d; border-radius:14px; padding:32px 36px;
+                text-align:center;">
+        <div style="font-size:32px; margin-bottom:12px;">🏈</div>
+        <h2 style="color:#f4f6f8; margin:0 0 10px 0; font-size:20px;">
+            Sideline isn't available in your region</h2>
+        <p style="color:#8ea0b5; font-size:14px; margin:0; line-height:1.6;">
+            Sideline runs on the free tier of Google's Gemini API, which can't be
+            offered to people in the EU/EEA, the UK or Switzerland. Sorry about that!
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+    st.stop()
+
+# ------------------------------------------------------------------
+# Consent Gate — shown before any interaction, then remembered in the
+# visitor's own browser for 30 days (a cookie holding only the Terms
+# version agreed to). Bumping TERMS_VERSION asks everyone again.
+# ------------------------------------------------------------------
+TERMS_VERSION = "2026-10"
+CONSENT_COOKIE = "sideline_consent"
+CONSENT_DAYS = 30
+
+if not st.session_state["terms_accepted"] and st.context.cookies.get(CONSENT_COOKIE) == TERMS_VERSION:
+    st.session_state["terms_accepted"] = True
+
 if not st.session_state["terms_accepted"]:
     st.markdown("""
     <div style="max-width:560px; margin:80px auto 0 auto; background:#131c28;
@@ -413,9 +442,11 @@ if not st.session_state["terms_accepted"]:
             <strong style="color:#c8d6e5;">Before you continue:</strong><br>
             • <strong style="color:#c8d6e5;">You must be 18 or older</strong> to use this App
               (required by Google's Gemini API terms).<br>
+            • Not available in the EU/EEA, the UK or Switzerland (Gemini free-tier terms).<br>
             • Responses are AI-generated and may be inaccurate or delayed.<br>
             • Do not use this App for sports betting or high-stakes fantasy decisions.<br>
-            • No account needed. Your chat lives only in this browser tab.<br>
+            • No account needed. Your chat lives only in this browser tab; this browser
+              remembers that you agreed for 30 days.<br>
             • Questions are answered with Google Gemini; on its free tier Google may
               use and human-review them, so don't include personal information.<br>
             • Independent fan project — not affiliated with the NFL, its teams, ESPN or Sleeper.<br>
@@ -431,11 +462,13 @@ if not st.session_state["terms_accepted"]:
     _tos_url  = f"{_repo}/blob/main/TERMS_OF_SERVICE.md"  if _repo else ""
     _priv_url = f"{_repo}/blob/main/PRIVACY_POLICY.md"    if _repo else ""
     _legal_links = (
-        f"By continuing you confirm you're 18 or older and agree to the "
+        f"By continuing you confirm you're 18 or older, not located in the EU/EEA, UK or "
+        f"Switzerland, and agree to the "
         f"<a href='{_tos_url}' target='_blank' style='color:#4f8ff0;'>Terms of Service</a> and "
         f"<a href='{_priv_url}' target='_blank' style='color:#4f8ff0;'>Privacy Policy</a>."
         if _repo else
-        "By continuing you confirm you're 18 or older and agree to the Terms of Service and Privacy Policy."
+        "By continuing you confirm you're 18 or older, not located in the EU/EEA, UK or "
+        "Switzerland, and agree to the Terms of Service and Privacy Policy."
     )
 
     _, col, _ = st.columns([2, 3, 2])
@@ -453,14 +486,25 @@ if not st.session_state["terms_accepted"]:
             f"{_legal_links}</p>",
             unsafe_allow_html=True,
         )
-        # Gemini API terms: no use by, or apps likely to be accessed by, under-18s.
-        age_ok = st.checkbox("I confirm I'm 18 or older", key="age_confirmed")
+        # Gemini API terms: no use by, or apps likely to be accessed by, under-18s,
+        # and free-tier apps may not be offered in the EEA, UK or Switzerland.
+        age_ok = st.checkbox("I'm 18 or older and not located in the EU/EEA, UK or Switzerland",
+                             key="age_confirmed")
         if st.button("✅ I agree — let's go", use_container_width=True, type="primary",
                      disabled=not age_ok,
-                     help=None if age_ok else "Please confirm you're 18 or older first"):
+                     help=None if age_ok else "Please confirm the box above first"):
             st.session_state["terms_accepted"] = True
+            st.session_state["remember_consent"] = True
             st.rerun()
     st.stop()  # Render nothing else until accepted
+
+if st.session_state.pop("remember_consent", False):
+    # Written from the component frame into the app page (same origin), so the
+    # next visit's connection carries it and st.context.cookies can read it.
+    components.html(f"""<script>
+    const secure = window.parent.location.protocol === "https:" ? "; Secure" : "";
+    window.parent.document.cookie = "{CONSENT_COOKIE}={TERMS_VERSION}; Max-Age={CONSENT_DAYS * 86400}; Path=/; SameSite=Lax" + secure;
+    </script>""", height=0)
 
 THINKING_MESSAGES = [
     "Checking the box score...",
