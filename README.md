@@ -287,8 +287,8 @@ NFL_Chatbot/
   used for apps offered there, so visitors confirm their location on the consent
   screen, and browsers set to a time zone in those regions see a notice instead.
 - No accounts, and nothing is stored server-side. Chat history lives only in
-  your browser tab; a `sideline_consent` cookie remembers the agreement in your
-  browser for 30 days.
+  your browser tab; a `sideline_consent` entry in your browser's local storage
+  remembers the agreement for 30 days.
 - Questions are processed by Google Gemini. On the free tier, Google may use
   them to improve its products and human reviewers may read them, so please don't
   include personal information.

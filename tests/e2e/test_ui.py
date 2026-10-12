@@ -36,7 +36,8 @@ def test_agree_requires_age_confirmation(app):
 def test_returning_visitor_skips_the_welcome_screen(app):
     """The agreement is remembered in the browser (30 days), not asked every visit."""
     app.accept_consent()
-    time.sleep(1.5)  # let the cookie-writing frame run
+    time.sleep(1.5)  # let the browser save it
+    assert '"version"' in (app.page.evaluate("localStorage.getItem('sideline_consent')") or "")
     app.page.reload()
     app.page.locator('[data-testid="stChatInputTextArea"]').wait_for(timeout=60_000)
     assert app.page.get_by_text("Welcome to Sideline").count() == 0

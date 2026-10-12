@@ -415,15 +415,56 @@ if is_restricted_region(st.context.timezone):
 
 # ------------------------------------------------------------------
 # Consent Gate — shown before any interaction, then remembered in the
-# visitor's own browser for 30 days (a cookie holding only the Terms
-# version agreed to). Bumping TERMS_VERSION asks everyone again.
+# visitor's own browser for 30 days. Bumping TERMS_VERSION asks everyone again.
+#
+# Stored in localStorage and read in the browser, not a cookie: Streamlit
+# Community Cloud's proxy strips cookies before they reach the app, so
+# st.context.cookies is always empty there. The entry holds only the Terms
+# version and an expiry time.
 # ------------------------------------------------------------------
 TERMS_VERSION = "2026-10"
-CONSENT_COOKIE = "sideline_consent"
 CONSENT_DAYS = 30
+CONSENT_WAIT_RUNS = 6      # ~2s for the browser to report before showing the form
 
-if not st.session_state["terms_accepted"] and st.context.cookies.get(CONSENT_COOKIE) == TERMS_VERSION:
+_CONSENT_JS = """
+export default function(component) {
+    const { data, setStateValue } = component;
+    const KEY = "sideline_consent";
+    let stored = "";
+    try {
+        if (data.save) {
+            localStorage.setItem(KEY, JSON.stringify(
+                {version: data.version, until: Date.now() + data.days * 86400000}));
+        }
+        const saved = JSON.parse(localStorage.getItem(KEY) || "null");
+        if (saved && saved.until > Date.now()) stored = saved.version;
+        else localStorage.removeItem(KEY);
+    } catch (e) { /* storage blocked (e.g. some private modes): ask each visit */ }
+    setStateValue("stored", stored);
+}
+"""
+_consent_store = st.components.v2.component("consent_store", js=_CONSENT_JS)
+
+_consent = _consent_store(
+    key="consent_store",
+    data={"version": TERMS_VERSION, "days": CONSENT_DAYS,
+          "save": st.session_state.get("remember_consent", False)},
+    on_stored_change=lambda: None,
+)
+_stored = _consent.get("stored") if _consent else None
+if _stored == TERMS_VERSION:
     st.session_state["terms_accepted"] = True
+    st.session_state.pop("remember_consent", None)   # saved; stop re-writing it
+
+if not st.session_state["terms_accepted"] and _stored is None:
+    # First instant of a visit: the browser hasn't reported yet. Wait briefly
+    # rather than flash the welcome screen at someone who already agreed; the
+    # report itself triggers a rerun. Capped so a blocked script can't hang it.
+    _waits = st.session_state.get("consent_waits", 0)
+    if _waits < CONSENT_WAIT_RUNS:
+        st.session_state["consent_waits"] = _waits + 1
+        time.sleep(0.35)
+        st.rerun()
 
 if not st.session_state["terms_accepted"]:
     st.markdown("""
@@ -497,14 +538,6 @@ if not st.session_state["terms_accepted"]:
             st.session_state["remember_consent"] = True
             st.rerun()
     st.stop()  # Render nothing else until accepted
-
-if st.session_state.pop("remember_consent", False):
-    # Written from the component frame into the app page (same origin), so the
-    # next visit's connection carries it and st.context.cookies can read it.
-    components.html(f"""<script>
-    const secure = window.parent.location.protocol === "https:" ? "; Secure" : "";
-    window.parent.document.cookie = "{CONSENT_COOKIE}={TERMS_VERSION}; Max-Age={CONSENT_DAYS * 86400}; Path=/; SameSite=Lax" + secure;
-    </script>""", height=0)
 
 THINKING_MESSAGES = [
     "Checking the box score...",
@@ -836,10 +869,11 @@ _COLLAPSE_JS = """
         }""" % PHONE_JS
 
 # Sideways phones start with the sidebar closed too (Streamlit's "auto" only
-# looks at width). Once per session, so it never fights a user who reopens it.
-if not st.session_state.get("sidebar_start_checked"):
-    st.session_state["sidebar_start_checked"] = True
-    components.html("<script>" + _COLLAPSE_JS + "</script>", height=0)
+# looks at width). Drawn on every run with identical HTML: Streamlit keeps the
+# same frame and doesn't re-run it, so it fires once per page load and never
+# fights a user who reopens the sidebar. (Drawing it only on the first run lost
+# it when the consent save's rerun followed right after.)
+components.html("<!-- start closed --><script>" + _COLLAPSE_JS + "</script>", height=0)
 
 if sidebar_prompt:
     # The run counter makes the HTML differ every time: Streamlit reuses an
