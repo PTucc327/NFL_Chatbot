@@ -440,7 +440,10 @@ export default function(component) {
         if (saved && saved.until > Date.now()) stored = saved.version;
         else localStorage.removeItem(KEY);
     } catch (e) { /* storage blocked (e.g. some private modes): ask each visit */ }
-    setStateValue("stored", stored);
+    // Report only what Python doesn't already know. Each report reruns the
+    // app, and one arriving just after "I agree" could interrupt the first
+    // question mid-answer.
+    if (stored !== data.known) setStateValue("stored", stored);
 }
 """
 _consent_store = st.components.v2.component("consent_store", js=_CONSENT_JS)
@@ -448,13 +451,15 @@ _consent_store = st.components.v2.component("consent_store", js=_CONSENT_JS)
 _consent = _consent_store(
     key="consent_store",
     data={"version": TERMS_VERSION, "days": CONSENT_DAYS,
-          "save": st.session_state.get("remember_consent", False)},
+          # Save only when agreed in this session, so the 30 days count from
+          # agreeing rather than renewing on every visit.
+          "save": st.session_state.get("remember_consent", False),
+          "known": TERMS_VERSION if st.session_state["terms_accepted"] else None},
     on_stored_change=lambda: None,
 )
 _stored = _consent.get("stored") if _consent else None
 if _stored == TERMS_VERSION:
     st.session_state["terms_accepted"] = True
-    st.session_state.pop("remember_consent", None)   # saved; stop re-writing it
 
 if not st.session_state["terms_accepted"] and _stored is None:
     # First instant of a visit: the browser hasn't reported yet. Wait briefly
