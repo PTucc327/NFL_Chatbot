@@ -1,6 +1,6 @@
 # 🏈 Sideline
 
-![Deployed: private demo](https://img.shields.io/badge/deployed-private%20demo-ff4b4b?logo=streamlit&logoColor=white)
+[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://sideline.streamlit.app/)
 [![CI](https://github.com/PTucc327/NFL_Chatbot/actions/workflows/ci.yml/badge.svg)](https://github.com/PTucc327/NFL_Chatbot/actions/workflows/ci.yml)
 ![Python 3.12](https://img.shields.io/badge/python-3.12-3776ab?logo=python&logoColor=white)
 
@@ -11,10 +11,10 @@
 > An AI assistant for NFL fans that answers in plain English from **live data**: scores,
 > schedules, standings, box scores, injuries, team rankings and fantasy advice.
 
-**Live demo:** deployed on Streamlit Community Cloud as a private app.
-[Message me on LinkedIn](https://www.linkedin.com/in/paul-tuccinardi/) for access,
-or [run it locally](#run-it-locally) with a free Gemini key. The screenshots below
-are from the deployed app.
+**Try it:** **[sideline.streamlit.app](https://sideline.streamlit.app/)**. It's free with no
+sign-up, for adults 18+ outside the EU/EEA, UK and Switzerland. If it's been idle it
+takes about 30 seconds to wake up. You can also [run it locally](#run-it-locally)
+with a free Gemini key. The screenshots below are from the deployed app.
 
 ![Sideline home screen](docs/screenshots/home.png)
 
