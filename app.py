@@ -224,7 +224,8 @@ st.markdown("""
         padding: 9px 12px;
     }
     div.stButton > button[kind="primary"]:hover {
-        background: linear-gradient(120deg, #3f7bfa 0%, #2a5cd6 100%);
+        /* Darker on hover, not lighter: white on the old #3f7bfa was 3.9:1 (WCAG AA needs 4.5) */
+        background: linear-gradient(120deg, #2563eb 0%, #1a43a8 100%);
         color: #ffffff;
     }
 
@@ -392,6 +393,125 @@ if "pending_selection" not in st.session_state:
     st.session_state["pending_selection"] = None
 if "queued_query" not in st.session_state:
     st.session_state["queued_query"] = None
+
+# ------------------------------------------------------------------
+# Accessibility — patches Streamlit's markup for screen readers and the
+# keyboard, and announces new answers. Runs in the app page itself (not this
+# component's frame) so its observer outlives reruns; installed once per page.
+# ------------------------------------------------------------------
+_A11Y_JS = r"""
+(() => {
+  const doc = document;
+  const live = doc.createElement('div');
+  live.id = 'sideline-live';
+  live.setAttribute('role', 'status');
+  live.setAttribute('aria-live', 'polite');
+  live.setAttribute('aria-atomic', 'true');
+  live.style.cssText = 'position:absolute;width:1px;height:1px;margin:-1px;padding:0;' +
+                       'overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0;';
+  doc.body.appendChild(live);
+
+  const LEADING_EMOJI = /^[\p{Extended_Pictographic}\p{Emoji_Presentation}\uFE0F\u200D\s]+/u;
+  const spoken = (el) => {           // text a screen reader should hear
+    const c = el.cloneNode(true);
+    c.querySelectorAll('[aria-hidden="true"], [data-testid="stIconMaterial"]').forEach(n => n.remove());
+    return c.textContent.replace(/\s+/g, ' ').trim();
+  };
+  let announced = null;
+
+  function patch() {
+    // Landmarks, so screen-reader users can jump between chat and tools.
+    const main = doc.querySelector('section.stMain');
+    if (main && main.getAttribute('role') !== 'main') main.setAttribute('role', 'main');
+    const side = doc.querySelector('section[data-testid="stSidebar"]');
+    if (side && !side.getAttribute('aria-label')) side.setAttribute('aria-label', 'Sideline tools');
+    const bottom = doc.querySelector('[data-testid="stBottom"]');
+    if (bottom && !bottom.getAttribute('role')) {
+      bottom.setAttribute('role', 'region');
+      bottom.setAttribute('aria-label', 'Ask a question');
+    }
+    // Icon-only toggles: name them (their only text is the icon's ligature).
+    [['[data-testid="stExpandSidebarButton"]', 'Open tools sidebar'],
+     ['[data-testid="stSidebarCollapseButton"] button', 'Close tools sidebar']].forEach(([sel, name]) =>
+      doc.querySelectorAll(sel).forEach(b => {
+        const btn = b.tagName === 'BUTTON' ? b : (b.querySelector('button') || b);
+        if (btn.getAttribute('aria-label') !== name) btn.setAttribute('aria-label', name);
+      }));
+    // Material icons are ligature text ("keyboard_arrow_down"): hide it.
+    doc.querySelectorAll('[data-testid="stIconMaterial"]:not([aria-hidden])')
+       .forEach(e => e.setAttribute('aria-hidden', 'true'));
+    // Zero-height script frames (like this one): keep them out of the tab order.
+    doc.querySelectorAll('iframe[title="st.iframe"]:not([tabindex="-1"])').forEach(f => {
+      if (f.getBoundingClientRect().height < 2) {
+        f.setAttribute('tabindex', '-1');
+        f.setAttribute('aria-hidden', 'true');
+      }
+    });
+    // Answers use ### headings for looks; to screen readers they sit under
+    // the page's h1, so present them as level 2.
+    doc.querySelectorAll('[data-testid="stChatMessage"] h3:not([aria-level])')
+       .forEach(h => { h.setAttribute('role', 'heading'); h.setAttribute('aria-level', '2'); });
+    // Charts: one described image (the numbers are in the table below it),
+    // and a name for the chart's "..." menu.
+    doc.querySelectorAll('[data-testid="stVegaLiteChart"]').forEach(chart => {
+      const svg = chart.querySelector('svg');
+      if (!svg || svg.getAttribute('aria-hidden') === 'true') return;
+      svg.setAttribute('aria-hidden', 'true');      // Vega labels every point
+      svg.parentElement.setAttribute('role', 'img');
+      svg.parentElement.setAttribute('aria-label', 'Line chart of weekly PPR fantasy points; ' +
+                                     'the numbers are in the "Chart data as a table" section below.');
+    });
+    doc.querySelectorAll('[data-testid="stVegaLiteChart"] details > summary:not([aria-label])')
+       .forEach(s => s.setAttribute('aria-label', 'Chart options'));
+    // Heading anchor links: invisible, useless tab stops.
+    doc.querySelectorAll('[data-testid="stHeaderActionElements"] a:not([tabindex])')
+       .forEach(a => { a.setAttribute('tabindex', '-1'); a.setAttribute('aria-hidden', 'true'); });
+    // Labels without their leading emoji ("clipboard Daily Briefing").
+    doc.querySelectorAll('button, summary').forEach(b => {
+      const t = spoken(b);
+      if (!t) return;
+      const clean = t.replace(LEADING_EMOJI, '');
+      if (clean && clean !== t && b.getAttribute('aria-label') !== clean) b.setAttribute('aria-label', clean);
+    });
+  }
+
+  function announce() {
+    const busy = [...doc.querySelectorAll('[data-testid="stStatusWidget"]')]
+      .some(e => /Running|Stop/i.test(e.textContent));
+    if (busy) return;
+    const marks = doc.querySelectorAll('.msg-time[data-role="assistant"]');
+    const msg = marks.length ? marks[marks.length - 1].closest('[data-testid="stChatMessage"]') : null;
+    const key = marks.length + ':' + (msg ? msg.textContent.length : 0);
+    if (announced === null) { announced = key; return; }   // history already on screen
+    if (key === announced) return;
+    announced = key;
+    if (!msg) return;
+    const text = spoken(msg.querySelector('[data-testid="stChatMessageContent"]') || msg)
+      .replace(/\s*\d{1,2}:\d{2}\s*[AP]M\s*$/, '');
+    live.textContent = 'Sideline answered: ' + (text.length > 600 ? text.slice(0, 600) + '…' : text);
+  }
+
+  // Throttled, not debounced: Streamlit mutates the page often enough that a
+  // debounce could keep postponing the patch.
+  let timer = null;
+  new MutationObserver(() => {
+    if (timer) return;
+    timer = setTimeout(() => { timer = null; patch(); announce(); }, 300);
+  }).observe(doc.body, {childList: true, subtree: true, characterData: true});
+  patch();
+})();
+"""
+components.html(
+    "<!-- a11y --><script>"
+    "const w = window.parent;"
+    "if (!w.__sidelineA11y) {"
+    "  w.__sidelineA11y = true;"
+    "  const s = w.document.createElement('script');"
+    f"  s.textContent = {json.dumps(_A11Y_JS)};"
+    "  w.document.head.appendChild(s);"
+    "}</script>",
+    height=0,
+)
 
 # ------------------------------------------------------------------
 # Region notice — Gemini's free tier can't be offered in the EEA, UK or
@@ -945,6 +1065,10 @@ def _render_chart(chart: dict) -> None:
     palette = ["#4f8ff0", "#f5a524", "#3ecf8e", "#e5484d"]
     st.line_chart(df, x_label="Week", y_label="PPR points",
                   color=palette[:len(df.columns)])
+    # Text alternative: the chart itself is a picture to screen readers, and
+    # the lines differ only by color.
+    with st.expander("Chart data as a table"):
+        st.dataframe(df.rename_axis("Week"), use_container_width=True)
 
 
 for message in st.session_state.messages:
@@ -954,7 +1078,9 @@ for message in st.session_state.messages:
         if message.get("chart"):
             _render_chart(message["chart"])
         if ts := message.get("time"):
-            st.markdown(f'<div class="msg-time">{ts}</div>', unsafe_allow_html=True)
+            # data-role lets the accessibility script find and announce answers.
+            st.markdown(f'<div class="msg-time" data-role="{message["role"]}">{ts}</div>',
+                        unsafe_allow_html=True)
 
 # ------------------------------------------------------------------
 # Input Handling — text (voice input lives in the sidebar now)
@@ -1016,7 +1142,7 @@ if final_query:
     st.session_state.messages.append({"role": "user", "content": final_query, "time": now})
     with st.chat_message("user", avatar="🙋"):
         st.markdown(final_query)
-        st.markdown(f'<div class="msg-time">{now}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="msg-time" data-role="user">{now}</div>', unsafe_allow_html=True)
 
     with st.chat_message("assistant", avatar="🏈"):
         with st.spinner(random.choice(THINKING_MESSAGES)):
@@ -1062,7 +1188,7 @@ if final_query:
                 # Weekly PPR chart, kept with the message so it survives reruns.
                 if response.chart_data:
                     _render_chart(response.chart_data)
-                st.markdown(f'<div class="msg-time">{reply_time}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="msg-time" data-role="assistant">{reply_time}</div>', unsafe_allow_html=True)
                 st.session_state.messages.append({"role": "assistant", "content": full_response,
                                                   "time": reply_time, "chart": response.chart_data})
 
@@ -1101,7 +1227,7 @@ if final_query:
         # --- Standard response ---
         else:
             st.markdown(response)
-            st.markdown(f'<div class="msg-time">{reply_time}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="msg-time" data-role="assistant">{reply_time}</div>', unsafe_allow_html=True)
             st.session_state.messages.append({"role": "assistant", "content": response, "time": reply_time})
 
 

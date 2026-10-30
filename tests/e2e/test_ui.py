@@ -145,7 +145,7 @@ def test_team_card_and_team_stats_button(app):
     card = app.sidebar.locator(".team-card").first.inner_text()
     assert "Kansas City Chiefs" in card
     assert re.search(r"\d+-\d+", card) and "AFC West" in card  # record and division
-    app.sidebar.get_by_role("button", name=re.compile("📈 Stats")).click()
+    app.sidebar.get_by_role("button", name="Stats", exact=True).click()  # read without its emoji
     app.wait_idle()
     answer = app.last_answer()
     assert "Team Rankings" in answer and "Defense" in answer

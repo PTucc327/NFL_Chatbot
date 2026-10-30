@@ -40,6 +40,7 @@ bandit_report.json
 
 # Browser test artifacts
 tests/e2e/app_server.log
+tests/e2e/.axe-*.min.js
 
 # Eval run outputs (reports are local; see evals/README)
 evals/results/

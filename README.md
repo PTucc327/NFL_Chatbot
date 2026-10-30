@@ -118,8 +118,10 @@ flowchart LR
 
 | Job | What it checks |
 |---|---|
-| Unit tests | 267 tests; all HTTP and Gemini calls mocked |
-| Browser tests | 13 Playwright tests drive the real app (first visit, questions, player selection, sidebar tools, timezones, phone layout). Gemini is replaced by a stand-in, so no key or quota is used |
+| Unit tests | 272 tests; all HTTP and Gemini calls mocked |
+| Browser tests | 18 Playwright tests drive the real app (first visit, questions, player selection, sidebar tools, timezones, region notice, remembered consent). Gemini is replaced by a stand-in, so no key or quota is used |
+| Accessibility | 7 tests: [axe-core](https://github.com/dequelabs/axe-core) finds no WCAG 2.2 AA issues on any screen (desktop and phone), plus keyboard-only use, clean screen-reader button names, a text alternative for charts and spoken announcements of new answers |
+| Phone tests | The main flow on 15 device profiles: iPhones in WebKit (Safari's engine), Androids in Chromium, two held sideways |
 | Secrets scan | `detect-secrets` blocks any credential not in the baseline |
 | Dependency audit | `pip-audit --strict` on production and dev requirements |
 
@@ -175,7 +177,7 @@ Gemini deadline, and local favorites.
 ```bash
 pip install -r requirements-dev.txt
 python -m pytest tests/ -q                     # unit tests (no network, no key)
-python -m playwright install chromium          # once, for browser tests
+python -m playwright install chromium webkit   # once, for browser tests
 ```
 
 Browser tests start the app themselves. They run only when `RUN_E2E=1` is set:
@@ -253,8 +255,8 @@ NFL_Chatbot/
 ├── data/                     # teams, legends (109), prospects, weekly rosters
 ├── scripts/update_data.py    # Roster refresh and prospect pruning
 ├── tests/
-│   ├── test_*.py             # Unit tests (267)
-│   └── e2e/                  # Playwright browser tests (13)
+│   ├── test_*.py             # Unit tests (272)
+│   └── e2e/                  # Playwright browser, accessibility and phone tests (40)
 ├── evals/                    # Answer-quality evals: 27 real questions + checks
 ├── docs/screenshots/         # README images, captured from the deployed app
 ├── .github/workflows/        # ci.yml (4 jobs) · refresh_data.yml (weekly)
