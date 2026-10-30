@@ -323,6 +323,12 @@ st.markdown("""
         padding: 6px 6px;
         font-size: 13px;
     }
+    /* Streamlit 1.66 keeps widget labels on one line; this one is a sentence
+       and ran off phone screens. */
+    .st-key-age_confirmed [data-testid="stMarkdownContainer"],
+    .st-key-age_confirmed p { white-space: normal !important; }
+    /* Same for example-question buttons (the sidebar's short labels stay one line) */
+    [data-testid="stMainBlockContainer"] div.stButton button p { white-space: normal !important; }
     section[data-testid="stSidebar"] div.stButton button p {
         white-space: nowrap;
     }
@@ -453,13 +459,19 @@ _A11Y_JS = r"""
        .forEach(h => { h.setAttribute('role', 'heading'); h.setAttribute('aria-level', '2'); });
     // Charts: one described image (the numbers are in the table below it),
     // and a name for the chart's "..." menu.
+    // The drawing is hidden (Vega labels every point) and a visually hidden
+    // sentence stands in for it; not role="img" on the box, which also holds
+    // the chart's "..." menu.
     doc.querySelectorAll('[data-testid="stVegaLiteChart"]').forEach(chart => {
       const svg = chart.querySelector('svg');
       if (!svg || svg.getAttribute('aria-hidden') === 'true') return;
-      svg.setAttribute('aria-hidden', 'true');      // Vega labels every point
-      svg.parentElement.setAttribute('role', 'img');
-      svg.parentElement.setAttribute('aria-label', 'Line chart of weekly PPR fantasy points; ' +
-                                     'the numbers are in the "Chart data as a table" section below.');
+      svg.setAttribute('aria-hidden', 'true');
+      const desc = doc.createElement('p');
+      desc.className = 'sr-chart-desc';
+      desc.style.cssText = live.style.cssText;
+      desc.textContent = 'Line chart of weekly PPR fantasy points. ' +
+                         'The numbers are in the "Chart data as a table" section below.';
+      svg.before(desc);
     });
     doc.querySelectorAll('[data-testid="stVegaLiteChart"] details > summary:not([aria-label])')
        .forEach(s => s.setAttribute('aria-label', 'Chart options'));
@@ -987,7 +999,10 @@ _COLLAPSE_JS = """
         const doc = window.parent.document;
         const bar = doc.querySelector('section[data-testid="stSidebar"]');
         // Only when open: the button toggles, so on a closed sidebar it would open it.
-        if (%s && bar && bar.getAttribute('aria-expanded') === 'true') {
+        // (Streamlit 1.66 marks state with data-collapsed; older versions aria-expanded.)
+        const open = bar && (bar.getAttribute('data-collapsed') === 'false' ||
+                             bar.getAttribute('aria-expanded') === 'true');
+        if (%s && open) {
             const btn = doc.querySelector('[data-testid="stSidebarCollapseButton"] button')
                      || doc.querySelector('[data-testid="stSidebarCollapseButton"]');
             if (btn) btn.click();

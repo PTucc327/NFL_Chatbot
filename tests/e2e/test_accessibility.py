@@ -82,7 +82,7 @@ def test_player_chart_has_text_alternative(app, axe_source):
     if not chart.count():
         pytest.skip("no weekly stats to chart right now")
     assert app.page.get_by_text("Chart data as a table").count() >= 1
-    assert chart.first.locator('[role="img"][aria-label*="fantasy points"]').count() == 1
+    assert "fantasy points" in chart.first.locator(".sr-chart-desc").inner_text()
     assert violations(app.page, axe_source) == []
 
 

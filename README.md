@@ -134,7 +134,7 @@ by reintroducing those bugs and confirming the tests fail.
 
 | Layer | Technology |
 |---|---|
-| UI | Streamlit 1.54 (Community Cloud) |
+| UI | Streamlit 1.66 (Community Cloud) |
 | LLM | Google Gemini via `google-genai` 2.7: 3.5 Flash-Lite, 2.5 Flash, 3.6 Flash |
 | Data | ESPN site API · Sleeper API · RSS (Google News, Yahoo Sports, ProFootballTalk) |
 | Matching | `rapidfuzz` |

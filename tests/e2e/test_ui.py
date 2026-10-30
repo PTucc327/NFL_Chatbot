@@ -186,7 +186,8 @@ def test_favorite_team_becomes_lookup_team(app):
     app.sidebar_section("Favorites")
     assert sb.get_by_role("button", name=re.compile("Get My Updates")).is_visible()
     app.sidebar_section("Team")
-    lookup = sb.locator('[data-testid="stSelectbox"]').first.inner_text().strip()
+    # Streamlit 1.66's combobox holds the choice as the input's value.
+    lookup = sb.locator('[data-testid="stSelectbox"] input').first.input_value().strip()
     assert lookup.startswith("Philadelphia Eagles")
     assert app.page.locator('[data-testid="stException"]').count() == 0
 
